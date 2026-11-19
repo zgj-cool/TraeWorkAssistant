@@ -2,8 +2,11 @@
 //! 原 src-python/workbuddy_checkin.py 的 Rust 移植，逐函数对齐：
 //! - 签到：checkin_status（新路径回退旧路径）→ checkin_do（域名双探测 + 已签容错 + 奖励宽容解析）
 //!   → 余额差值兜底（F-17，仅差值>0 采信）→ 401 刷新一次重试（F-09，禁二次刷新）
-//! - 成长：travel（status→claim→config→depart）/ lottery（chances→draw 循环上限 20）/
-//!   tasks（GET 列表 → 批量报名 task_codes → 已完成任务逐个 reward/claim 领奖）
+//! - 成长（活动域，travel/lottery/task-claim 不带 /v2）：
+//!   travel（status.state 状态机：在途等待 / 到站先 claim 再派 / 空闲先领养 Buddy 再 depart）/
+//!   lottery（lottery/summary chances → draw 带 client_token 循环上限 20）/
+//!   tasks（GET `/v2/activity/growth/tasks` → 批量报名 task_codes →
+//!   对 progress 达标者逐个 `POST /activity/growth/tasks/{code}/claim`，不伪造使用行为）
 //!   各步独立容错，401 同款刷新重试
 //! - NDJSON 事件契约（wb-checkin-progress 管线，前端逐行 JSON.parse）：
 //!   start {type,total[,mode]} / account {user_id,name,status,message[,reward]
@@ -61,38 +64,50 @@ struct Urls {
     checkin_status: String,
     checkin_status_old: String,
     checkin_do: String,
+    /// 成长中心统一走活动域（CN=www.workbuddy.cn，Global=www.workbuddy.ai）。
+    /// 实测：travel/lottery/streak/task-claim **不带 /v2**，只有 tasks 列表/accept 带 /v2。
+    web: &'static str,
     travel_status: String,
     travel_claim: String,
     travel_config: String,
     travel_depart: String,
-    lottery_chances: String,
+    buddy_info: String,
+    buddy_first: String,
+    buddy_agreement: String,
+    lottery_summary: String,
     lottery_draw: String,
     tasks: String,
     tasks_accept: String,
-    tasks_reward_claim: String,
+    /// 任务领奖为路径参数式：`{base}/activity/growth/tasks/{task_code}/claim`（POST，无 body）
+    tasks_claim_base: String,
     energy: String,
     streak: String,
 }
 
 fn urls_for(base: &'static str) -> Urls {
     let b = base;
-    let g = format!("{b}/v2/activity/growth");
+    let web = wb_common::region_activity_base(base);
+    let wg = format!("{web}/activity/growth");
     Urls {
         base,
         checkin_status: format!("{b}/v2/billing/meter/checkin-activity-status"),
         checkin_status_old: format!("{b}/v2/billing/meter/checkin-status"),
         checkin_do: format!("{b}/v2/billing/meter/daily-checkin"),
-        travel_status: format!("{g}/buddy/travel/status"),
-        travel_claim: format!("{g}/buddy/travel/claim"),
-        travel_config: format!("{g}/buddy/travel/config"),
-        travel_depart: format!("{g}/buddy/travel/depart"),
-        lottery_chances: format!("{g}/lottery/chances"),
-        lottery_draw: format!("{g}/lottery/draw"),
-        tasks: format!("{g}/tasks"),
-        tasks_accept: format!("{g}/tasks/accept"),
-        tasks_reward_claim: format!("{g}/tasks/reward/claim"),
-        energy: format!("{g}/energy"),
-        streak: format!("{g}/streak"),
+        web,
+        travel_status: format!("{wg}/buddy/travel/status"),
+        travel_claim: format!("{wg}/buddy/travel/claim"),
+        travel_config: format!("{wg}/buddy/travel/config"),
+        travel_depart: format!("{wg}/buddy/travel/depart"),
+        buddy_info: format!("{wg}/buddy/info"),
+        buddy_first: format!("{wg}/buddy/first"),
+        buddy_agreement: format!("{wg}/buddy/agreement"),
+        lottery_summary: format!("{wg}/lottery/summary"),
+        lottery_draw: format!("{wg}/lottery/draw"),
+        tasks: format!("{web}/v2/activity/growth/tasks"),
+        tasks_accept: format!("{web}/v2/activity/growth/tasks/accept"),
+        tasks_claim_base: format!("{wg}/tasks"),
+        energy: format!("{wg}/energy"),
+        streak: format!("{wg}/streak"),
     }
 }
 
@@ -899,7 +914,58 @@ where
     (kind, msg)
 }
 
-/// Buddy 旅行：status → arrived 则 claim → config → depart（各步独立容错）
+/// 旅行状态归一：上游权威字段为 `data.state`（idle / traveling / arrived），不是 arrived 布尔。
+fn travel_state_of(body: &Option<Value>) -> String {
+    body.as_ref()
+        .and_then(|b| fs_utils::dig(b, &["state"]))
+        .map(|v| s_of(Some(v)).trim().to_ascii_lowercase())
+        .unwrap_or_default()
+}
+
+/// 领养前探活：`buddy/info` 无 buddy（null/缺字段）才需要 `/buddy/first`；
+/// 查询失败一律 fail-open 当作已有，避免误触发领养写操作。
+fn buddy_missing(agent: &ureq::Agent, headers: &[(String, String)], urls: &Urls) -> bool {
+    let (st, body, _raw) = wb_common::get_json(agent, &urls.buddy_info, headers);
+    if st != 200 {
+        return false;
+    }
+    let Some(b) = body.as_ref() else { return false };
+    let buddy = fs_utils::dig(b, &["buddy"]);
+    match buddy {
+        None => true,
+        Some(Value::Null) => true,
+        Some(Value::Object(m)) => m.is_empty() || (!m.contains_key("id") && !m.contains_key("buddy_id")),
+        Some(Value::String(s)) => s.trim().is_empty() || s.trim() == "null",
+        _ => false,
+    }
+}
+
+/// 目的地 id：实测 1~4；配置不可用时默认 1（咖啡馆）。
+fn travel_location_id(agent: &ureq::Agent, headers: &[(String, String)], urls: &Urls) -> u32 {
+    let body = wb_common::get_json(agent, &urls.travel_config, headers)
+        .1
+        .filter(|b| b.is_object());
+    let Some(b) = body else { return 1 };
+    let candidates = fs_utils::dig(&b, &["locations", "list", "records"])
+        .and_then(Value::as_array)
+        .map(|a| a.as_slice())
+        .unwrap_or(&[]);
+    for item in candidates {
+        if let Some(id) = fs_utils::dig(item, &["id", "location_id"])
+            .and_then(|v| v.as_u64().or_else(|| v.as_str()?.trim().parse::<u64>().ok()))
+        {
+            if (1..=4).contains(&id) {
+                return id as u32;
+            }
+        }
+    }
+    1
+}
+
+/// Buddy 猫猫旅行闭环：status 状态机（在途等待 / 到站先领后派 / 空闲先领养再派出）。
+/// 权威口径见 gcli2api `internal/upstream/travel.go`：
+/// `GET /activity/growth/buddy/travel/status` → `data.state=idle|traveling|arrived`，
+/// `record_id` 用于 claim，depart body 为 `{"location_id":1}`（无 /v2、活动域）。
 fn growth_travel(agent: &ureq::Agent, headers: &[(String, String)], urls: &Urls) -> (String, String) {
     let (status, body, raw) = wb_common::get_json(agent, &urls.travel_status, headers);
     if status == 401 {
@@ -914,50 +980,97 @@ fn growth_travel(agent: &ureq::Agent, headers: &[(String, String)], urls: &Urls)
         };
         return ("fail".into(), msg);
     }
-    let b = body.as_ref().unwrap();
-    let arrived = py_truthy(fs_utils::dig(b, &["arrived", "is_arrived", "has_arrived"]));
-    let record_id = fs_utils::dig(b, &["record_id", "recordId"]).cloned();
-    if !arrived {
-        // 未到达：报告在途状态即可
-        let dest = fs_utils::dig(b, &["destination", "name", "target"]).map(|v| s_of(Some(v)));
-        let suffix = dest
-            .filter(|d| !d.is_empty())
-            .map(|d| format!("（{d}）"))
-            .unwrap_or_default();
-        return ("skip".into(), format!("旅行在途{suffix}"));
+
+    let mut state = travel_state_of(&body);
+    let mut record_id = fs_utils::dig(body.as_ref().unwrap(), &["record_id", "recordId"]).cloned();
+    let mut daily_limit = fs_utils::dig(body.as_ref().unwrap(), &["daily_limit_reached"])
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let mut notes: Vec<String> = Vec::new();
+    let mut did_something = false;
+
+    if state == "traveling" {
+        let rid = record_id.as_ref().map(|v| format!("（记录 {}）", value_display(v))).unwrap_or_default();
+        return ("skip".into(), format!("旅行在途{rid}，等待到站"));
     }
-    // 领奖
-    let claim_body = match &record_id {
-        Some(r) => json!({"record_id": r}),
-        None => json!({}),
-    };
-    let (st1, b1, r1) = wb_common::post_json_raw(agent, &urls.travel_claim, headers, &claim_body);
-    if st1 == 401 {
-        return ("auth".into(), "登录态失效（401）".into());
+
+    // 到站：先领奖，再复查状态（领奖后服务端会把 state 复位为 idle）
+    if state == "arrived" {
+        if let Some(rid) = record_id.clone() {
+            let (st, b1, r1) = wb_common::post_json_raw(
+                agent,
+                &urls.travel_claim,
+                headers,
+                &json!({"record_id": rid}),
+            );
+            if st == 401 {
+                return ("auth".into(), "登录态失效（401，旅行领奖）".into());
+            }
+            if (200..=201).contains(&st) {
+                did_something = true;
+                notes.push(format!("领奖{}", reward_text(b1.as_ref(), &r1)));
+                let (st2, body2, _raw2) = wb_common::get_json(agent, &urls.travel_status, headers);
+                if st2 == 200 {
+                    state = travel_state_of(&body2);
+                    record_id = body2
+                        .as_ref()
+                        .and_then(|b| fs_utils::dig(b, &["record_id", "recordId"]))
+                        .cloned();
+                    daily_limit = body2
+                        .as_ref()
+                        .and_then(|b| fs_utils::dig(b, &["daily_limit_reached"]))
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+                }
+            } else {
+                return ("fail".into(), format!("旅行领奖失败（HTTP {st}）"));
+            }
+        } else {
+            return ("fail".into(), "旅行已到站但缺 record_id，无法领奖".into());
+        }
     }
-    let claim_txt = if (200..=201).contains(&st1) {
-        reward_text(b1.as_ref(), &r1)
-    } else {
-        format!("claim 失败（HTTP {st1}）")
-    };
-    // 查目的地配置并出发（config 失败不阻塞 depart）
-    let dest = wb_common::get_json(agent, &urls.travel_config, headers)
-        .1
-        .filter(|b2| b2.is_object())
-        .and_then(|b2| fs_utils::dig(&b2, &["destination", "name", "target"]).cloned());
-    let depart_body = match &dest {
-        Some(d) => json!({"destination": d}),
-        None => json!({}),
-    };
-    let (st3, _b3, _r3) = wb_common::post_json_raw(agent, &urls.travel_depart, headers, &depart_body);
-    let dest_txt = dest
-        .as_ref()
-        .map(|d| format!("（{}）", value_display(d)))
-        .unwrap_or_default();
-    if (200..=201).contains(&st3) {
-        return ("ok".into(), format!("领奖{claim_txt}，已出发{dest_txt}"));
+
+    // 无猫先领养：同意协议 → first（门槛未完成时当日静默跳过）
+    if buddy_missing(agent, headers, urls) {
+        let _ = wb_common::post_json_raw(agent, &urls.buddy_agreement, headers, &json!({"agree": true}));
+        let (st, _b, r) = wb_common::post_json_raw(agent, &urls.buddy_first, headers, &json!({}));
+        if st == 401 {
+            return ("auth".into(), "登录态失效（401，领养 Buddy）".into());
+        }
+        if st == 400 && r.contains("first_buddy task not completed yet") {
+            return ("skip".into(), "领养门槛未达标（first_buddy 任务未完成），今日不重试".to_string());
+        }
+        if (200..=201).contains(&st) {
+            did_something = true;
+            notes.push("已领养 Buddy".into());
+        } else {
+            notes.push(format!("领养失败（HTTP {st}）"));
+        }
     }
-    ("ok".into(), format!("领奖{claim_txt}；depart 失败（HTTP {st3}）"))
+
+    if state == "idle" || state.is_empty() {
+        if daily_limit {
+            notes.push("今日已派出，等待次日 00:00 重置".into());
+        } else {
+            let loc = travel_location_id(agent, headers, urls);
+            let (st, _b, _r) =
+                wb_common::post_json_raw(agent, &urls.travel_depart, headers, &json!({"location_id": loc}));
+            if st == 401 {
+                return ("auth".into(), "登录态失效（401，派出旅行）".into());
+            }
+            if (200..=201).contains(&st) {
+                did_something = true;
+                notes.push(format!("已派出旅行（地点 {loc}）"));
+            } else {
+                return ("fail".into(), format!("派出旅行失败（HTTP {st}）"));
+            }
+        }
+    } else if !notes.iter().any(|n| n.contains("领奖")) {
+        notes.push(format!("旅行状态 {state}，未派出"));
+    }
+
+    let kind = if did_something { "ok" } else { "skip" };
+    (kind.into(), notes.join("；"))
 }
 
 /// 展示用值文本（数字去尾零、字符串原样）
@@ -968,25 +1081,50 @@ fn value_display(v: &Value) -> String {
     }
 }
 
-/// 盲盒：chances(balance>0) → draw 循环（可开关）
+/// 抽奖幂等令牌（前端 randomUUID 同款 8-4-4-4-12 形态；本地只需唯一，不要求密码学强度）
+fn lottery_client_token(seq: usize) -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    let x = nanos
+        ^ ((std::process::id() as u64) << 32)
+        ^ (seq as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    format!(
+        "{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
+        (x >> 32) as u32,
+        ((x >> 16) & 0xffff) as u16,
+        (x & 0xffff) as u16,
+        ((x >> 48) & 0xffff) as u16,
+        x & 0xffff_ffff_ffff
+    )
+}
+
+/// 盲盒：lottery/summary(chances) → draw 循环（上限 20）。
+/// 实测端点是活动域 `/activity/growth/lottery/{summary,draw}`（无 /v2），
+/// draw 必须带 `client_token` 幂等令牌，空 body 会被上游静默拒绝。
 fn growth_lottery(agent: &ureq::Agent, headers: &[(String, String)], urls: &Urls) -> (String, String) {
-    let (status, body, raw) = wb_common::get_json(agent, &urls.lottery_chances, headers);
+    let (status, body, raw) = wb_common::get_json(agent, &urls.lottery_summary, headers);
     if status == 401 {
         return ("auth".into(), "登录态失效（401）".into());
     }
     if status != 200 || !body.as_ref().is_some_and(|b| b.is_object()) {
         let head: String = raw.chars().take(60).collect();
         let msg = if status != 0 {
-            format!("lottery/chances 不可用（HTTP {status}）")
+            format!("lottery/summary 不可用（HTTP {status}）")
         } else {
-            format!("lottery/chances 不可达: {head}")
+            format!("lottery/summary 不可达: {head}")
         };
         return ("fail".into(), msg);
     }
     let b = body.as_ref().unwrap();
-    // 对齐 python int(balance)：数字（float 四舍五入）或整数字符串；小数字符串视为无效。
-    // 审查 P1-4：不用 as i64 截断——JSON 浮点表示误差（3.0 实存 2.9999…）会少抽一次
-    let balance = fs_utils::dig(b, &["balance", "chances", "count", "remain"]).and_then(|v| match v {
+    if fs_utils::dig(b, &["module", "enabled"])
+        .and_then(Value::as_bool)
+        .is_some_and(|enabled| !enabled)
+    {
+        return ("skip".into(), "抽奖模块未开启".into());
+    }
+    let balance = fs_utils::dig(b, &["chances", "balance", "count", "remain"]).and_then(|v| match v {
         Value::Number(n) => n.as_i64().or_else(|| n.as_f64().map(|f| f.round() as i64)),
         Value::String(s) => s.trim().parse::<i64>().ok(),
         _ => None,
@@ -998,23 +1136,31 @@ fn growth_lottery(agent: &ureq::Agent, headers: &[(String, String)], urls: &Urls
     let mut draws = 0usize;
     let mut rewards: Vec<String> = vec![];
     while balance > 0 && draws < LOTTERY_MAX_DRAWS {
-        let (st, b, _r) = wb_common::post_json_raw(agent, &urls.lottery_draw, headers, &json!({}));
+        let (st, b, r) = wb_common::post_json_raw(
+            agent,
+            &urls.lottery_draw,
+            headers,
+            &json!({"client_token": lottery_client_token(draws + 1)}),
+        );
         if st == 401 {
             return ("auth".into(), format!("登录态失效（401，已抽 {draws} 次）"));
         }
         if !(200..=201).contains(&st) {
+            let head: String = r.chars().take(60).collect();
+            if draws == 0 {
+                return ("fail".into(), format!("draw 失败（HTTP {st}）{head}"));
+            }
             break;
         }
         draws += 1;
-        if let Some(rw) = b.as_ref().and_then(|bb| fs_utils::dig(bb, &["reward", "credits", "points", "amount"])) {
-            if !rw.is_null() {
-                rewards.push(value_display(rw));
-            }
+        let prize = b
+            .as_ref()
+            .and_then(|bb| fs_utils::dig(bb, &["prize", "reward", "name"]))
+            .or_else(|| b.as_ref().and_then(|bb| fs_utils::dig(bb, &["credit", "credits", "points", "amount"])));
+        if let Some(rw) = prize.filter(|v| !v.is_null()) {
+            rewards.push(value_display(rw));
         }
         balance -= 1;
-    }
-    if draws == 0 {
-        return ("fail".into(), "draw 不可用".into());
     }
     let joined = if rewards.is_empty() {
         "见响应".to_string()
@@ -1061,12 +1207,9 @@ fn task_claimed(t: &Value) -> bool {
     ["claimed", "received", "已领取", "claimedreward"].contains(&s.as_str())
 }
 
-/// 完成判定：状态枚举优先；无状态时用 progress.current >= target 兜底（target 必须 > 0）。
+/// 完成判定：官方口径以 progress 为准（current >= target 且 target > 0），
+/// 平铺 current/target 与嵌套 progress 都支持；无进度信息时才回退状态枚举。
 fn task_completed(t: &Value) -> bool {
-    let s = task_status_norm(t);
-    if ["complete", "completed", "finished", "claimable", "rewardavailable", "已完成", "已达标", "可领取"].contains(&s.as_str()) {
-        return true;
-    }
     let progress = fs_utils::dig(t, &["progress"]);
     let current = progress
         .and_then(|p| fs_utils::dig(p, &["current", "value", "count", "num"]))
@@ -1076,7 +1219,11 @@ fn task_completed(t: &Value) -> bool {
         .and_then(|p| fs_utils::dig(p, &["target", "total", "goal", "need"]))
         .and_then(|v| num_or_none(Some(v)))
         .or_else(|| fs_utils::dig(t, &["target", "progress_target"]).and_then(|v| num_or_none(Some(v))));
-    matches!((current, target), (Some(c), Some(tg)) if tg > 0.0 && c >= tg)
+    if let (Some(c), Some(tg)) = (current, target) {
+        return tg > 0.0 && c >= tg;
+    }
+    let s = task_status_norm(t);
+    ["complete", "completed", "finished", "claimable", "rewardavailable", "已完成", "已达标", "可领取"].contains(&s.as_str())
 }
 
 fn task_claimable(t: &Value) -> bool {
@@ -1189,17 +1336,21 @@ fn growth_tasks(agent: &ureq::Agent, headers: &[(String, String)], urls: &Urls) 
         }
     }
     for code in &claim_codes {
-        let (st, b, r) = wb_common::post_json_raw(
-            agent,
-            &used.tasks_reward_claim,
-            headers,
-            &json!({"task_code": code}),
-        );
+        // 实测领奖为路径参数式：`{web}/activity/growth/tasks/{task_code}/claim`，POST 无 body。
+        // 旧 `POST /v2/.../tasks/reward/claim {"task_code":...}` 是误用路径，恒 400。
+        let claim_url = format!("{}/{}/claim", used.tasks_claim_base.trim_end_matches('/'), code);
+        let (st, b, r) = wb_common::post_json_raw(agent, &claim_url, headers, &json!({}));
         if st == 401 {
             return ("auth".into(), format!("登录态失效（401，领奖阶段，已领 {claimed} 项）"));
         }
         let biz = task_business_error(&b);
-        let already = biz.as_deref().is_some_and(|m| m.contains("已领") || m.to_ascii_lowercase().contains("already"));
+        let already_flag = b
+            .as_ref()
+            .and_then(|bb| fs_utils::dig(bb, &["already_claimed"]))
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let already = already_flag
+            || biz.as_deref().is_some_and(|m| m.contains("已领") || m.to_ascii_lowercase().contains("already"));
         if ((200..=201).contains(&st) && biz.is_none()) || already {
             claimed += 1;
         } else {
@@ -1424,22 +1575,46 @@ mod wb_checkin_tests {
     fn urls_cover_all_endpoints_and_alt_region() {
         let u = urls_for(wb_common::BILLING_BASE_CN);
         assert!(u.checkin_do.starts_with(wb_common::BILLING_BASE_CN));
-        assert!(u.travel_status.contains("/v2/activity/growth/buddy/travel/status"));
+        // 成长中心走活动域且不带 /v2（签到仍在 billing 域带 /v2）
+        assert!(u.travel_status.starts_with(wb_common::ACTIVITY_BASE_CN));
+        assert!(u.travel_status.ends_with("/activity/growth/buddy/travel/status"));
+        assert!(!u.travel_status.contains("/v2/"));
+        assert!(u.lottery_summary.ends_with("/activity/growth/lottery/summary"));
+        assert!(u.lottery_draw.ends_with("/activity/growth/lottery/draw"));
+        assert!(u.streak.ends_with("/activity/growth/streak"));
+        assert!(u.buddy_first.ends_with("/activity/growth/buddy/first"));
         let alt = u.alt();
         assert_eq!(alt.base, wb_common::BILLING_BASE_GLOBAL);
         assert_ne!(alt.checkin_do, u.checkin_do);
     }
 
     #[test]
-    fn growth_task_urls_cover_accept_and_reward_claim() {
+    fn growth_task_urls_cover_accept_and_path_style_claim() {
         let u = urls_for(wb_common::BILLING_BASE_CN);
+        assert!(u.tasks.starts_with(wb_common::ACTIVITY_BASE_CN));
         assert!(u.tasks.ends_with("/v2/activity/growth/tasks"));
         assert!(u.tasks_accept.ends_with("/tasks/accept"));
-        assert!(u.tasks_reward_claim.ends_with("/tasks/reward/claim"));
-        assert!(u.alt().tasks_reward_claim.contains(wb_common::BILLING_BASE_GLOBAL));
+        assert!(u.tasks_claim_base.ends_with("/activity/growth/tasks"));
+        let claim = format!("{}/{}/claim", u.tasks_claim_base, "daily_chat");
+        assert!(claim.ends_with("/activity/growth/tasks/daily_chat/claim"));
+        assert!(!claim.contains("/reward/claim"));
+        assert!(u.alt().tasks_claim_base.contains(wb_common::BILLING_BASE_GLOBAL));
         // CN 区任务链可探测 billing → activity → chat；Global 区只走自身域名
         assert_eq!(task_list_candidates(wb_common::BILLING_BASE_CN).len(), 3);
         assert_eq!(task_list_candidates(wb_common::BILLING_BASE_GLOBAL).len(), 1);
+    }
+
+    #[test]
+    fn growth_travel_state_uses_data_state_not_arrived_bool() {
+        let body = json!({"data": {"state": "arrived", "record_id": 42, "daily_limit_reached": false}});
+        assert_eq!(travel_state_of(&Some(body)), "arrived");
+        assert_eq!(travel_state_of(&Some(json!({"data": {"state": "traveling"}}))), "traveling");
+        // 旧字段 arrived=true 但无 state 时不误判为已到站
+        assert_eq!(travel_state_of(&Some(json!({"arrived": true}))), "");
+        let token = lottery_client_token(3);
+        assert_eq!(token.len(), 36);
+        assert_eq!(token.matches('-').count(), 4);
+        assert_ne!(token, lottery_client_token(4));
     }
 
     #[test]
