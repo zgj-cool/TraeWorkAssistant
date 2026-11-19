@@ -115,6 +115,8 @@ interface AppState {
   setView: (v: ViewKey) => void;
   /** 切换侧边栏应用 Tab，并跳到该应用默认首页 */
   setActiveApp: (app: AppKey) => void;
+  /** 从总览页直达指定平台的指定页面：一次性写入，避免 setActiveApp 把 view 重置为首页 */
+  openPlatformView: (app: AppKey, view: ViewKey) => void;
   applyCheckinEvent: (e: CheckinProgressEvent) => void;
   /** Qoder 签到 NDJSON 进度归约（start/done/逐账号行/exit；skipped_busy 与
    * empty 计数口径对齐 Rust 侧） */
@@ -575,6 +577,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   setView: (v) => set({ view: v }),
   setActiveApp: (app) => set({ activeApp: app, view: APP_HOME_VIEW[app] }),
+  openPlatformView: (app, view) => set({ activeApp: app, view }),
   setShowApiManager: (v) => set({ showApiManager: v }),
   dismissTraeworkGuide: async () => {
     // 先收起弹窗再落标记：标记写失败（下次启动会再弹）不静默，toast 明示

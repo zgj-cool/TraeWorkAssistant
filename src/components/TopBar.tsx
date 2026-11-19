@@ -554,11 +554,52 @@ function BuddyAiTopBar() {
   );
 }
 
+/** 总览视图顶栏：只展示与平台无关的共享状态，避免显示 Trae/Buddy 等平台专属徽标 */
+function OverviewTopBar() {
+  const certInstalled = useAppStore((s) => s.certInstalled);
+  const proxy = useAppStore((s) => s.proxy);
+  const apiStatus = useAppStore((s) => s.apiStatus);
+  const startProxy = useAppStore((s) => s.startProxy);
+  const stopProxy = useAppStore((s) => s.stopProxy);
+  return (
+    <>
+      <div className="flex items-center gap-2">
+        <Badge tone="brand">全平台总览</Badge>
+        <Badge tone={certInstalled ? 'green' : 'amber'}>
+          {certInstalled ? <ShieldCheck size={13} /> : <ShieldAlert size={13} />}
+          {certInstalled ? '证书已信任' : '证书未安装'}
+        </Badge>
+        <Badge tone={proxy.running ? 'blue' : 'slate'}>
+          <Wifi size={13} /> {proxy.running ? `代理运行中 :${proxy.port}` : '代理未启动'}
+        </Badge>
+        <Badge tone={apiStatus?.running ? 'green' : 'slate'}>
+          <Server size={13} /> {apiStatus?.running ? `API网关运行中 :${apiStatus.port}` : 'API网关未启动'}
+        </Badge>
+      </div>
+      <div className="flex items-center gap-2">
+        {proxy.running ? (
+          <button onClick={stopProxy} className="btn-outline">
+            <PowerOff size={15} /> 停止代理
+          </button>
+        ) : (
+          <button onClick={startProxy} className="btn-outline">
+            <Power size={15} /> 启动代理
+          </button>
+        )}
+        <GatewayButton />
+      </div>
+    </>
+  );
+}
+
 export default function TopBar() {
   const activeApp = useAppStore((s) => s.activeApp);
+  const view = useAppStore((s) => s.view);
   return (
     <div className="flex h-12 shrink-0 items-center justify-between border-b border-slate-200 bg-white px-4 dark:border-zinc-800 dark:bg-zinc-950">
-      {activeApp === 'doubao' ? (
+      {view === 'overview' ? (
+        <OverviewTopBar />
+      ) : activeApp === 'doubao' ? (
         <DoubaoTopBar />
       ) : activeApp === 'buddy' ? (
         <BuddyTopBar />

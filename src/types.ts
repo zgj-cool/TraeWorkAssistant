@@ -2,6 +2,8 @@
 // 嵌套对象（CheckinOpts / LogsOpts / Settings）的字段必须保持 snake_case。
 
 export type ViewKey =
+  // 跨平台总览（侧栏常驻入口，平台无关）
+  | 'overview'
   | 'dashboard'
   | 'accounts'
   | 'checkin'
@@ -2022,6 +2024,19 @@ export interface QoderCreditAccount {
   /** 数据源徽标：pat | client_token | fetch_failed | none */
   source: string;
   fetched_at: string;
+}
+
+/** Qoder 官网网页会话积分消耗（今日，官方 histories 接口） */
+export interface QoderWebUsageToday {
+  ok: boolean;
+  /** 名义消耗（original_credits 求和），用于「今日已用」 */
+  used_today: number | null;
+  /** 实际扣费（credits 求和） */
+  billed_today?: number | null;
+  records?: number;
+  source?: string;
+  fetched_at?: number;
+  error?: string;
 }
 
 export interface QoderCreditsResult {

@@ -1,0 +1,388 @@
+import { dateStrToEndTs } from '../../lib/format';
+import type {
+  AccountView,
+  QoderAccountView,
+  QoderCheckinRecord,
+  QoderCreditsResult,
+  QoderCreditsSnapshot,
+  QoderWebUsageToday,
+  UsageHistoryResult,
+  ViewKey,
+  WbCheckinRecord,
+  WbCreditsResult,
+  WbUsageFallback,
+  WbUsageOfficialAll,
+  WorkBuddyAccountView,
+} from '../../types';
+
+/** 长期有效包哨兵（与 ExpiryTab / Rust pack_to_detail 同口径） */
+export const PERPETUAL_TS = 4102444800;
+const DAY_SEC = 86_400;
+const ALERT_SEC = 24 * 3600;
+const EXPIRY_SEC = 7 * DAY_SEC;
+
+/** 总览只展示积分型平台（豆包为额度口径，不参与本页） */
+export type PlatformKey = 'trae' | 'buddy' | 'qoder';
+
+export interface PlatformAlert {
+  id: string;
+  platform: PlatformKey;
+  user_id: string;
+  name: string;
+  reason: string;
+  view: ViewKey;
+}
+
+/** 积分到期明细：不进「账号告警」，单独在底部列表展示 */
+export interface ExpiringDetail {
+  id: string;
+  user_id: string;
+  name: string;
+  reason: string;
+  /** 7 日内到期的积分；null = 仅有到期时间、无包级金额 */
+  credits: number | null;
+  view: ViewKey;
+}
+
+export interface PlatformSummary {
+  key: PlatformKey;
+  accounts: number;
+  checkedToday: number;
+  /** 可用积分；null = 数据源缺失，不与 0 混淆 */
+  available: number | null;
+  /** 今日已用积分；null = 数据源缺失，不与 0 混淆 */
+  usedToday: number | null;
+  /** 7 天内到期积分金额 */
+  expiringIn7d: number | null;
+  alertAccounts: number;
+  /** 仅凭证类告警（临期 / 需重登） */
+  alerts: PlatformAlert[];
+  /** 7 日内积分到期明细（逐账号，金额可为 null） */
+  expiringDetails: ExpiringDetail[];
+  notes: string[];
+}
+
+export interface OverviewData {
+  traeAccounts: AccountView[];
+  /** Trae 官网消耗明细（usage_history_fetch） */
+  traeUsage: UsageHistoryResult | null;
+  wbAccounts: WorkBuddyAccountView[];
+  wbCredits: WbCreditsResult | null;
+  wbCheckin: WbCheckinRecord[];
+  /** Buddy 官网用量聚合（优先） */
+  wbOfficial: WbUsageOfficialAll | null;
+  /** Buddy 本地快照回退（官网不可用时） */
+  wbUsage: WbUsageFallback | null;
+  qoderAccounts: QoderAccountView[];
+  qoderCredits: QoderCreditsResult | null;
+  qoderCheckin: QoderCheckinRecord[];
+  /** Qoder 本地积分快照差分（官网会话不可用时回退） */
+  qoderSnapshots: QoderCreditsSnapshot[];
+  /** Qoder 官网会话今日消耗（优先） */
+  qoderWebUsage: QoderWebUsageToday | null;
+  nowMs?: number;
+}
+
+export interface OverviewKpis {
+  accounts: number;
+  available: number | null;
+  usedToday: number | null;
+  expiringIn7d: number | null;
+  alerts: number;
+}
+
+function round(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
+function sumDefined(values: (number | null | undefined)[]): number | null {
+  const nums = values.filter((v): v is number => v != null && Number.isFinite(v));
+  return nums.length ? round(nums.reduce((s, n) => s + n, 0)) : null;
+}
+
+function localDate(ms: number): string {
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function alert(
+  out: PlatformAlert[],
+  platform: PlatformKey,
+  user_id: string,
+  name: string,
+  reason: string,
+  view: ViewKey,
+): void {
+  out.push({ id: `${platform}-${user_id}-${reason}`, platform, user_id, name, reason, view });
+}
+
+function finish(
+  key: PlatformKey,
+  accounts: number,
+  checkedToday: number,
+  available: number | null,
+  usedToday: number | null,
+  expiringIn7d: number | null,
+  alerts: PlatformAlert[],
+  expiringDetails: ExpiringDetail[],
+  notes: string[],
+): PlatformSummary {
+  return {
+    key,
+    accounts,
+    checkedToday,
+    available,
+    usedToday,
+    expiringIn7d,
+    alertAccounts: new Set(alerts.map((a) => a.user_id)).size,
+    alerts,
+    expiringDetails,
+    notes,
+  };
+}
+
+/** Trae：账号池（含逐包明细）+ 官网消耗明细（今日已用） */
+export function summarizeTrae(
+  accounts: AccountView[],
+  usage: UsageHistoryResult | null,
+  nowMs = Date.now(),
+): PlatformSummary {
+  const nowSec = Math.floor(nowMs / 1000);
+  const windowEnd = nowSec + EXPIRY_SEC;
+  const today = localDate(nowMs);
+  const todayValues = (usage?.accounts ?? [])
+    .map((a) => a.daily.find((d) => d.date.slice(0, 10) === today)?.credits)
+    .filter((v): v is number => v != null && Number.isFinite(v));
+  const usedToday = todayValues.length ? round(todayValues.reduce((s, n) => s + n, 0)) : null;
+  const alerts: PlatformAlert[] = [];
+  const expiringDetails: ExpiringDetail[] = [];
+  let expiring = 0;
+  let hasPacks = false;
+
+  for (const a of accounts) {
+    const packs = a.credit_packs ?? [];
+    if (a.credit_packs != null) hasPacks = true;
+    const soon = packs.filter(
+      (p) => p.remaining > 0 && p.expire_time > 0 && p.expire_time < PERPETUAL_TS && p.expire_time <= windowEnd,
+    );
+    if (soon.length) {
+      const amount = round(soon.reduce((s, p) => s + p.remaining, 0));
+      expiring += amount;
+      expiringDetails.push({
+        id: `trae-exp-${a.user_id}`,
+        user_id: a.user_id,
+        name: a.name,
+        reason: `${soon.length} 个积分包 7 天内到期`,
+        credits: amount,
+        view: 'credits',
+      });
+    } else if (
+      a.credit_packs == null &&
+      a.credits_expire_at != null &&
+      a.credits_expire_at <= windowEnd &&
+      (a.remaining_credits ?? 0) > 0
+    ) {
+      expiringDetails.push({
+        id: `trae-exp-${a.user_id}`,
+        user_id: a.user_id,
+        name: a.name,
+        reason: '积分 7 天内到期（未刷新明细）',
+        credits: null,
+        view: 'credits',
+      });
+    }
+    if (a.jwt_exp_hours != null && a.jwt_exp_hours <= 24) {
+      alert(alerts, 'trae', a.user_id, a.name, '凭证 24h 内到期', 'accounts');
+    } else if (a.refresh_token_invalid) {
+      alert(alerts, 'trae', a.user_id, a.name, '需重新 OAuth 登录', 'accounts');
+    }
+  }
+
+  return finish(
+    'trae',
+    accounts.length,
+    accounts.filter((a) => a.checked_today).length,
+    sumDefined(accounts.map((a) => a.remaining_credits)),
+    usedToday,
+    hasPacks ? round(expiring) : null,
+    alerts,
+    expiringDetails,
+    [
+      usedToday == null ? '今日已用：官网明细暂无数据' : '今日已用：官网消耗明细',
+      usage?.cached ? '官网明细缓存' : '',
+    ].filter(Boolean),
+  );
+}
+
+/** Buddy：账号池 + 积分查询（逐包）+ 官网用量优先/本地快照回退 + 签到记录 */
+export function summarizeBuddy(
+  accounts: WorkBuddyAccountView[],
+  credits: WbCreditsResult | null,
+  checkin: WbCheckinRecord[],
+  official: WbUsageOfficialAll | null,
+  fallback: WbUsageFallback | null,
+  nowMs = Date.now(),
+): PlatformSummary {
+  const nowSec = Math.floor(nowMs / 1000);
+  const windowEnd = nowSec + EXPIRY_SEC;
+  const today = localDate(nowMs);
+  const alerts: PlatformAlert[] = [];
+  const expiringDetails: ExpiringDetail[] = [];
+  const creditsAccounts = credits?.accounts ?? [];
+  let expiring = 0;
+  let hasCredits = creditsAccounts.length > 0;
+
+  for (const a of accounts) {
+    if (a.needs_relogin) alert(alerts, 'buddy', a.id, a.nickname, '需重新登录', 'buddy-accounts');
+    else if (a.access_token_expires_at != null && a.access_token_expires_at <= nowSec + ALERT_SEC) {
+      alert(alerts, 'buddy', a.id, a.nickname, '凭证 24h 内到期', 'buddy-accounts');
+    }
+  }
+  for (const a of creditsAccounts) {
+    const soon = (a.packages ?? []).filter(
+      (p) =>
+        p.remaining > 0 &&
+        p.expire_ts != null &&
+        p.expire_ts > 0 &&
+        p.expire_ts < PERPETUAL_TS &&
+        p.expire_ts <= windowEnd,
+    );
+    if (soon.length) {
+      const amount = round(soon.reduce((s, p) => s + p.remaining, 0));
+      expiring += amount;
+      expiringDetails.push({
+        id: `buddy-exp-${a.user_id}`,
+        user_id: a.user_id,
+        name: a.name,
+        reason: `${soon.length} 个积分包 7 天内到期`,
+        credits: amount,
+        view: 'buddy-credits',
+      });
+    }
+  }
+
+  const officialToday = official?.summary?.usage_today;
+  const fallbackToday = fallback?.summary?.usage_today;
+  const usedToday = officialToday != null ? round(officialToday) : fallbackToday != null ? round(fallbackToday) : null;
+  const sourceNote = officialToday != null
+    ? official?.stale ? '今日已用：官网用量（过期缓存）' : '今日已用：官网用量'
+    : fallbackToday != null ? '今日已用：官网不可用，回退本地快照' : '今日已用：官网与快照均无数据';
+
+  return finish(
+    'buddy',
+    accounts.length,
+    new Set(checkin.filter((r) => r.date === today && r.status !== 'fail').map((r) => r.user_id)).size,
+    sumDefined(creditsAccounts.map((a) => a.balance)) ?? sumDefined(accounts.map((a) => a.credits_balance)),
+    usedToday,
+    hasCredits ? round(expiring) : null,
+    alerts,
+    expiringDetails,
+    [sourceNote],
+  );
+}
+
+/** Qoder：账号池 + 积分查询（逐包/订阅）+ 本地积分快照 + 签到记录（官网无消耗明细接口） */
+export function summarizeQoder(
+  accounts: QoderAccountView[],
+  credits: QoderCreditsResult | null,
+  checkin: QoderCheckinRecord[],
+  snapshots: QoderCreditsSnapshot[],
+  webUsage: QoderWebUsageToday | null,
+  nowMs = Date.now(),
+): PlatformSummary {
+  const nowSec = Math.floor(nowMs / 1000);
+  const windowEnd = nowSec + EXPIRY_SEC;
+  const today = localDate(nowMs);
+  const alerts: PlatformAlert[] = [];
+  const expiringDetails: ExpiringDetail[] = [];
+  const creditsAccounts = credits?.accounts ?? [];
+  let expiring = 0;
+  let hasCredits = creditsAccounts.length > 0;
+
+  for (const a of accounts) {
+    if (a.needs_relogin) alert(alerts, 'qoder', a.id, a.nickname, '需重新登录', 'qoder-accounts');
+    else if (a.token_expires_at != null && a.token_expires_at <= nowSec + ALERT_SEC) {
+      alert(alerts, 'qoder', a.id, a.nickname, '凭证 24h 内到期', 'qoder-accounts');
+    }
+  }
+  for (const a of creditsAccounts) {
+    const active = (a.packages ?? []).filter((p) => p.amount == null || p.amount > 0);
+    const soon = active.filter((p) => {
+      const end = dateStrToEndTs(p.expire_at);
+      return end != null && end <= windowEnd;
+    });
+    if (soon.length) {
+      const amount = round(soon.reduce((s, p) => s + (p.amount ?? 0), 0));
+      expiring += amount;
+      expiringDetails.push({
+        id: `qoder-exp-${a.user_id}`,
+        user_id: a.user_id,
+        name: a.name,
+        reason: `${soon.length} 个积分包 7 天内到期`,
+        credits: amount,
+        view: 'qoder-credits',
+      });
+    } else if (
+      active.length === 0 &&
+      (a.plan_credits ?? 0) > 0 &&
+      dateStrToEndTs(a.plan_expires_at) != null &&
+      (dateStrToEndTs(a.plan_expires_at) as number) <= windowEnd
+    ) {
+      expiringDetails.push({
+        id: `qoder-exp-${a.user_id}`,
+        user_id: a.user_id,
+        name: a.name,
+        reason: '订阅积分 7 天内重置',
+        credits: round(a.plan_credits ?? 0),
+        view: 'qoder-credits',
+      });
+    }
+  }
+
+  const todaySnap = [...snapshots].reverse().find((s) => s.date.slice(0, 10) === today);
+  const officialUsed = webUsage?.ok ? webUsage.used_today : null;
+  const usedToday = officialUsed != null ? round(officialUsed) : todaySnap?.consumed != null ? round(todaySnap.consumed) : null;
+  const sourceNote = officialUsed != null
+    ? '今日已用：官网会话消耗明细（当前客户端登录账号）'
+    : webUsage?.error ? '今日已用：官网会话不可用，回退本地快照' : '今日已用：本地积分快照差分';
+  return finish(
+    'qoder',
+    accounts.length,
+    new Set(checkin.filter((r) => r.date === today && r.status !== 'fail').map((r) => r.user_id)).size,
+    sumDefined(creditsAccounts.map((a) => a.total)) ?? sumDefined(accounts.map((a) => a.credits_balance)),
+    usedToday,
+    hasCredits ? round(expiring) : null,
+    alerts,
+    expiringDetails,
+    [sourceNote],
+  );
+}
+
+/** 三平台汇总（今日已用：Trae/Buddy 官网，Qoder 官网会话优先、本地快照回退） */
+export function aggregateKpis(summaries: PlatformSummary[]): OverviewKpis {
+  return {
+    accounts: summaries.reduce((n, s) => n + s.accounts, 0),
+    available: sumDefined(summaries.map((s) => s.available)),
+    usedToday: sumDefined(summaries.map((s) => s.usedToday)),
+    expiringIn7d: sumDefined(summaries.map((s) => s.expiringIn7d)),
+    alerts: new Set(summaries.flatMap((s) => s.alerts.map((a) => a.id))).size,
+  };
+}
+
+/** 一次聚合全部平台（页面只用这一个入口，便于测试） */
+export function buildOverview(data: OverviewData): { platforms: PlatformSummary[]; kpis: OverviewKpis } {
+  const now = data.nowMs ?? Date.now();
+  const platforms = [
+    summarizeTrae(data.traeAccounts, data.traeUsage, now),
+    summarizeBuddy(data.wbAccounts, data.wbCredits, data.wbCheckin, data.wbOfficial, data.wbUsage, now),
+    summarizeQoder(
+      data.qoderAccounts,
+      data.qoderCredits,
+      data.qoderCheckin,
+      data.qoderSnapshots,
+      data.qoderWebUsage,
+      now,
+    ),
+  ];
+  return { platforms, kpis: aggregateKpis(platforms) };
+}

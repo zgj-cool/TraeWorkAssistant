@@ -28,6 +28,7 @@ pub mod qoder_oauth;
 pub mod qoder_refresh;
 pub mod qoder_sign;
 pub mod qoder_upstream;
+pub mod qoder_web_usage;
 pub mod scheduler;
 pub mod trae_checkin;
 pub mod ui_click;

@@ -25,6 +25,16 @@ pub async fn qoder_credits_fetch(
     .map_err(|e| format!("积分查询任务失败: {e}"))?
 }
 
+/// 官网积分消耗明细（今日已用）：自动读取 Qoder 客户端会话 Cookie，
+/// 调 `/api/v1/me/usages/big_model_credits/histories` 按 begin_at 聚合。
+/// 不接收任何前端参数；失败返回 ok=false + 可读原因（零 cookie/token 输出）。
+#[tauri::command(async)]
+pub async fn qoder_web_usage_today() -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(crate::tasks::qoder_web_usage::fetch_today_usage)
+        .await
+        .map_err(|e| format!("官网用量查询任务失败: {e}"))
+}
+
 /// 积分快照时序（趋势图/到期日历数据源；365 天）
 #[tauri::command]
 pub fn qoder_credits_history_list(state: State<AppState>) -> Result<Value, String> {

@@ -7,6 +7,7 @@ import { useAppStore } from './store';
 import { api } from './lib/tauri';
 import { resolveTheme } from './lib/themes';
 import Dashboard from './pages/Dashboard';
+import Overview from './pages/Overview';
 import Accounts from './pages/Accounts';
 import Checkin from './pages/Checkin';
 import Logs from './pages/Logs';
@@ -41,6 +42,8 @@ import TraeWorkMigrationGuide from './components/TraeWorkMigrationGuide';
 
 function renderView(view: string) {
   switch (view) {
+    case 'overview':
+      return <Overview />;
     case 'dashboard':
       return <Dashboard />;
     case 'accounts':

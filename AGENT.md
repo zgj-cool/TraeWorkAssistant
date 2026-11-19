@@ -47,7 +47,8 @@ ai-work-assistant/
 │   ├── types.ts                  # 与 Rust DTO 对齐（snake_case）
 │   ├── lib/                      # tauri.ts(invoke 封装+事件订阅) / themes.ts(主题) / delay.ts(withMinDelay) / cn.ts / about.ts / useIsDark.ts
 │   ├── components/               # TitleBar/Sidebar/TopBar/Toaster/PageHeader/SetupGuide/ui + SystemDialog(系统设置+系统日志弹框)/GeneralSettingsPanel/AboutDialog
-│   └── pages/                    # Dashboard / Accounts(661行编排 + accounts/ 16 个拆分子组件) / Checkin / Logs / ApiService / Settings
+│   └── pages/                    # Overview(全平台总览) / Dashboard / Accounts(661行编排 + accounts/ 16 个拆分子组件) / Checkin / Logs / ApiService / Settings
+│   │                             #   overview/ 总览聚合纯函数 overviewModel + 卡片组件 OverviewCards（仅 Trae/Buddy/Qoder 三积分平台；今日已用三平台官网优先、失败回退本地快照；告警仅凭证、积分到期按平台单列明细）
 │   │                             #   dashboard/ 积分看板（platform 参数化：credits 视图=Trae 页、buddy-credits 视图=Buddy 页、qoder-credits 视图=Qoder 页替换旧 QoderCredits；KpiRow/CreditsTab/TokensTab/ExpiryTab/adapters）
 │   │                             #   buddy/（BuddyOverview/BuddyAccounts/BuddyCheckin/BuddyApiService/BuddySettings）
 ├── scripts/                      # dev-tauri.mjs(tauri 脚本入口) / sync_version.mjs / rename_release.mjs / package_portable.mjs / gen_asset_base64.mjs
@@ -76,7 +77,7 @@ ai-work-assistant/
 │       │   ├── models_sync.rs    # 模型列表配置化（api_models.json）+ 官网 batch_get_detail_param 同步
 │       │   └── api_logger.rs     # API 请求日志
 │       └── commands/             # env / cert / proxy / accounts / checkin / switch / misc / profile / api_server / oauth / trae_apps(本机 Trae 账号发现) / process(三级关闭) / updater / wb_config(wb 手工配置读写)；workbuddy/ 为目录模块（common/accounts/checkin/credits/cli/chatdata/oauth/env_reset，mod.rs pub use 保持命令路径不变）
-│       └── tasks/                # 后台业务直调模块（trae_checkin / wb_checkin / wb_common / wb_credits / doubao_session / doubao_quota / doubao_chats / ui_click）
+│       └── tasks/                # 后台业务直调模块（trae_checkin / wb_checkin / wb_common / wb_credits / qoder_web_usage（官网会话今日消耗） / doubao_session / doubao_quota / doubao_chats / ui_click）
 │           ├── trae_checkin.rs   # 批量签到（vault 解密内存传递，无子进程）
 │           ├── wb_checkin.rs     # WorkBuddy 签到/成长/续期（run_checkin_round / run_growth_round / run_renew_only）
 │           └── doubao_*.rs       # 豆包会话续期 / 额度巡检 / 对话导出
@@ -172,7 +173,7 @@ ai-work-assistant/
 | WorkBuddy | `workbuddy_account_save/remove` / `workbuddy_scan_auth_file` / `workbuddy_account_import_auth` | 别名备注 / 删除 / auth 文件扫描预览 / 确认入池（凭证入 token store 副本，零明文出 Rust） |
 | WorkBuddy | `workbuddy_refresh_token(userId)` | plugin refresh 端点（X-Refresh-Token 仅限此端点）+ 回写 token store 与账号池过期时间；失败提示需重登 |
 | WorkBuddy | `workbuddy_checkin_start(opts)` → NDJSON `wb-checkin-progress` | Rust 直调 `tasks/wb_checkin.rs::run_checkin_round`（状态查询回退旧路径 / code:10001 已签容错 / 401 刷新一次重试 / 零 token 输出）；opts: `{ user_ids?, skip_checked_in, skip_expired, lazy_hours? }` |
-| WorkBuddy | `workbuddy_growth_run()` | 成长中心执行入口（旅行/盲盒/任务开关从 workbuddy_settings.json 读取；`wb_checkin::run_growth_round` 链式执行：travel status→claim→config→depart / lottery chances→draw 循环（上限 20）/ tasks→accept，各步独立容错、401 刷新一次重试、奖励数额以接口返回为准） |
+| WorkBuddy | `workbuddy_growth_run()` | 成长中心执行入口（旅行/盲盒/任务开关从 workbuddy_settings.json 读取；`wb_checkin::run_growth_round` 链式执行：travel status→claim→config→depart / lottery chances→draw 循环（上限 20）/ tasks GET 列表→批量报名 `task_codes`→已完成任务逐个 `tasks/reward/claim` 领奖（不伪造使用行为），各步独立容错、401 刷新一次重试；任务列表 CN 区失败时依次探测 activity/chat 域，失败详情含 HTTP 状态码并落 app.log，奖励数额以接口返回为准） |
 | WorkBuddy | `workbuddy_checkin_results(days?)` | 签到日志（wb_checkin_results 表 90 天滚动，默认展示 30 天；**纯追加**：同日同账号多轮并存，返回新→旧序；活动档期日历聚合 `daysFromWbRecords` 按账号取当日最终态——任一 success/already 即当日已领、仅全失败计 fail） |
 | WorkBuddy | `workbuddy_checkin_task_register(times[]) / _status / _unregister` | schtasks 每日双时段签到任务 AIWorkAssistant_WorkBuddyCheckin_<HHMM>（09:00/21:00） |
 | WorkBuddy | `workbuddy_renew_task_register(day) / _status / _unregister` | schtasks 每周凭证续期兜底任务 AIWorkAssistant_WorkBuddyRenew（周日 10:30，主 exe `--task-run wb-renew` → `run_renew_only` 惰性刷新） |
@@ -201,6 +202,7 @@ ai-work-assistant/
 | Qoder | `qoder_account_import_pat(name?, pat)` | PAT/作业令牌手工导入（幂等：同 token 稳定同 id `qd-<sha256前12>`）；`pt-`/`jt-` 前缀均写入 access_token+pat 双字段（确保 ensure_fresh PAT 重换通道覆盖）；**导入成功后清理旧设备流凭证残留**（refresh_token/refresh_expires_at_ms；machine_id/machine_token 保留——PAT 通道仍消费有效指纹）；userinfo/plan 回填失败容错 |
 | Qoder | `qoder_account_refresh_token(account_id)` → `QoderAccountView` | 单账号凭证续期（账号管理操作列手动按钮，对照 workbuddy_refresh_token 同语义）：force 恒刷（lazy_hours=i64::MAX 走 ensure_fresh 无条件重换路径——PAT 通道重换作业令牌、客户端通道 deviceToken/refresh 续期）；每账号互斥由 refresh_lock_for 兜底；成功回读最新视图（到期时间/登录态即时刷新），失败按 note 分类中文归因（no_credential/refresh_failed 暂态/pat_rejected/auth_dead 永久）；async（spawn_blocking） |
 | Qoder | `qoder_ide_scan()` / `qoder_cli_status()` / `qoder_live_logins()` | 本机 Qoder 客户端账号发现 / CLI 切号桥状态 / 双客户端实时登录标记——`{ide, work}` 均为池反查后的账号 id（ide=state.vscdb `secret://auth.userInfo` 解密；work=Work 数据目录根级 `auth.v1.dat` v10 解密 `user.id`，2026-10-04 实测修正：Cookies 库无 qoderuid）；未登录/解密失败 → null（fail-open，前端不展示徽标）；async（spawn_blocking 派发，join 失败拒绝 → 前端 catch 静默置空） |
+| Qoder | `qoder_web_usage_today()` | 官网今日积分消耗明细（`tasks/qoder_web_usage.rs`）：自动读取 `com.qodercn.app.stable` 多 Profile Chromium Cookies（Local State os_crypt.encrypted_key → DPAPI → AES-256-GCM v10，客户端占用则复制 Cookies+wal/shm 重试 3 次），调 `https://qoder.com.cn/api/v1/me/usages/big_model_credits/histories?page&page_size=500&start_time&end_time&order_by=begin_at&order=-1`（Cookie/Origin/Referer/X-Requested-With 头），逐页严格校验 begin_at/original_credits/credits，按本地自然日聚合名义消耗 used_today 与实际扣费 billed_today（上限 6 页）；失败 ok=false + 可读原因、**零 cookie/token 日志输出**；总览页 Qoder 今日已用优先此值，失败回退本地积分快照；async（spawn_blocking） |
 | Qoder | `qoder_checkin_start(opts)` → NDJSON `qoder-checkin-progress` | Rust 直调 `tasks/qoder_checkin.rs::run_checkin_round`（sash 双活动 claim，幂等回放归类已签；claim 间隔 1~3s 随机抖动；claim POST 与列表补学统一最小头形态 `minimal_auth_headers`——issue #114：claim 端点带设备指纹头族被上游风控按形态 503 拦截，最小头通过，主列表/余额 GET 维持完整头；401 刷新一次重试；campaign_id 路径段白名单；done 事件含 `failed_empty_campaigns` 单列计数） |
 | Qoder | `qoder_checkin_results(days?)` | 签到日志（qoder_checkin_results 表 90 天滚动，逐条 UPSERT 按 pk=date\|user_id\|time_ms 去重） |
 | Qoder | `qoder_checkin_task_register(times[]) / _status / _unregister` | schtasks 每日签到任务（主 exe `--task-run qoder-checkin`；应用内调度器同款默认 10:15 单次覆盖双活动） |

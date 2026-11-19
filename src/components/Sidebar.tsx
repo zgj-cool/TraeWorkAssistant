@@ -124,7 +124,9 @@ export default function Sidebar({
   // 当前激活应用被隐藏（或固定项变更）时自动回落固定应用主页，避免停留在无 Tab 的应用
   useEffect(() => {
     if (!visibleTabs.some((t) => t.key === activeApp)) {
-      setActiveApp(pinnedApp);
+      // 总览为平台无关视图：仅回落 activeApp，不把 view 重置为应用首页
+      if (useAppStore.getState().view === 'overview') useAppStore.setState({ activeApp: pinnedApp });
+      else setActiveApp(pinnedApp);
     }
     // 审查修复：补 buddy_ai_visible 依赖——停留在 BuddyAI 应用时关闭其可见性，
     // 回落固定应用须即时触发（否则停留在无 Tab 的应用）
@@ -160,6 +162,21 @@ export default function Sidebar({
   return (
     <aside className="sticky left-0 z-10 flex w-52 shrink-0 flex-col border-r border-slate-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
       <nav className="flex-1 space-y-1 p-3">
+        {/* 跨平台总览：常驻顶部，不随应用 Tab 切换 */}
+        <button
+          onClick={() => onNav('overview')}
+          className={cn(
+            'flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition active:scale-[0.98]',
+            view === 'overview'
+              ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900'
+              : 'text-slate-600 hover:bg-slate-100 dark:text-zinc-400 dark:hover:bg-zinc-800',
+          )}
+          title="Trae / Buddy / Qoder / 豆包 一屏总览"
+        >
+          <LayoutDashboard size={17} />
+          总览
+        </button>
+        <div className="!my-2 border-t border-slate-100 dark:border-zinc-800" />
         {nav.map((item) => {
           const Icon = item.icon;
           const active = view === item.key;

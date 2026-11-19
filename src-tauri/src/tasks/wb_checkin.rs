@@ -3,7 +3,8 @@
 //! - 签到：checkin_status（新路径回退旧路径）→ checkin_do（域名双探测 + 已签容错 + 奖励宽容解析）
 //!   → 余额差值兜底（F-17，仅差值>0 采信）→ 401 刷新一次重试（F-09，禁二次刷新）
 //! - 成长：travel（status→claim→config→depart）/ lottery（chances→draw 循环上限 20）/
-//!   tasks（has_reward 过滤 → accept）各步独立容错，401 同款刷新重试
+//!   tasks（GET 列表 → 批量报名 task_codes → 已完成任务逐个 reward/claim 领奖）
+//!   各步独立容错，401 同款刷新重试
 //! - NDJSON 事件契约（wb-checkin-progress 管线，前端逐行 JSON.parse）：
 //!   start {type,total[,mode]} / account {user_id,name,status,message[,reward]
 //!   [,reward_pending,pre_balance,pre_wb_credits][,checkin_streak],index} /
@@ -54,6 +55,7 @@ pub struct GrowthOpts {
 }
 
 /// 区域端点表（对齐 python _urls_for；base 不带尾斜杠）
+#[derive(Clone)]
 struct Urls {
     base: &'static str,
     checkin_status: String,
@@ -67,6 +69,7 @@ struct Urls {
     lottery_draw: String,
     tasks: String,
     tasks_accept: String,
+    tasks_reward_claim: String,
     energy: String,
     streak: String,
 }
@@ -87,6 +90,7 @@ fn urls_for(base: &'static str) -> Urls {
         lottery_draw: format!("{g}/lottery/draw"),
         tasks: format!("{g}/tasks"),
         tasks_accept: format!("{g}/tasks/accept"),
+        tasks_reward_claim: format!("{g}/tasks/reward/claim"),
         energy: format!("{g}/energy"),
         streak: format!("{g}/streak"),
     }
@@ -1020,66 +1024,208 @@ fn growth_lottery(agent: &ureq::Agent, headers: &[(String, String)], urls: &Urls
     ("ok".into(), format!("抽取 {draws} 次（奖励 {joined}）"))
 }
 
-/// 任务领奖：tasks → 过滤 has_reward && 未领取 → accept {task_code}（可开关）
-fn growth_tasks(agent: &ureq::Agent, headers: &[(String, String)], urls: &Urls) -> (String, String) {
-    let (status, body, raw) = wb_common::get_json(agent, &urls.tasks, headers);
-    if status == 401 {
-        return ("auth".into(), "登录态失效（401）".into());
+/// 成长任务码：`task_code` / `taskCode` / `code`，空值不算。
+fn task_code_of(t: &Value) -> Option<String> {
+    for key in ["task_code", "taskCode", "code"] {
+        if let Some(v) = fs_utils::dig(t, &[key]) {
+            let code = s_of(Some(v));
+            if !code.is_empty() {
+                return Some(code);
+            }
+        }
     }
-    if status != 200 || !body.as_ref().is_some_and(|b| b.is_object()) {
+    None
+}
+
+/// 报名状态归一：大小写 / 连字符 / 下划线抹平（上游实测为 not_accepted → accepted → complete 字符串枚举）。
+fn task_status_norm(t: &Value) -> String {
+    fs_utils::dig(t, &["accept_status", "acceptStatus", "status"])
+        .map(|v| s_of(Some(v)).trim().to_ascii_lowercase().replace('-', "").replace('_', ""))
+        .unwrap_or_default()
+}
+
+fn task_needs_accept(t: &Value) -> bool {
+    let s = task_status_norm(t);
+    s.is_empty() || ["notaccepted", "unaccepted", "pending", "noaccept", "0", "false", "未报名"].contains(&s.as_str())
+}
+
+fn task_claimed(t: &Value) -> bool {
+    for key in ["claimed", "is_claimed", "has_claimed", "received"] {
+        if let Some(v) = fs_utils::dig(t, &[key]) {
+            if py_truthy(Some(v)) {
+                return true;
+            }
+        }
+    }
+    let s = task_status_norm(t);
+    ["claimed", "received", "已领取", "claimedreward"].contains(&s.as_str())
+}
+
+/// 完成判定：状态枚举优先；无状态时用 progress.current >= target 兜底（target 必须 > 0）。
+fn task_completed(t: &Value) -> bool {
+    let s = task_status_norm(t);
+    if ["complete", "completed", "finished", "claimable", "rewardavailable", "已完成", "已达标", "可领取"].contains(&s.as_str()) {
+        return true;
+    }
+    let progress = fs_utils::dig(t, &["progress"]);
+    let current = progress
+        .and_then(|p| fs_utils::dig(p, &["current", "value", "count", "num"]))
+        .and_then(|v| num_or_none(Some(v)))
+        .or_else(|| fs_utils::dig(t, &["current", "progress_current"]).and_then(|v| num_or_none(Some(v))));
+    let target = progress
+        .and_then(|p| fs_utils::dig(p, &["target", "total", "goal", "need"]))
+        .and_then(|v| num_or_none(Some(v)))
+        .or_else(|| fs_utils::dig(t, &["target", "progress_target"]).and_then(|v| num_or_none(Some(v))));
+    matches!((current, target), (Some(c), Some(tg)) if tg > 0.0 && c >= tg)
+}
+
+fn task_claimable(t: &Value) -> bool {
+    task_completed(t) && !task_claimed(t)
+}
+
+/// 任务链域名候选：当前 billing base 不通时依次探测活动域 / chat 域（仅 CN 区）。
+fn task_list_candidates(base: &'static str) -> Vec<Urls> {
+    let mut out = vec![urls_for(base)];
+    if !wb_common::is_global_region(base) {
+        for extra in [wb_common::ACTIVITY_BASE_CN, wb_common::REGION_CN.chat_base] {
+            if !out.iter().any(|u| u.base == extra) {
+                out.push(urls_for(extra));
+            }
+        }
+    }
+    out
+}
+
+/// HTTP 200 但业务码非 0 时视为失败（上游常在 body 里带 code/msg）。
+fn task_business_error(body: &Option<Value>) -> Option<String> {
+    let b = body.as_ref()?;
+    let code = fs_utils::dig(b, &["code", "errcode"])?;
+    let ok = match code {
+        Value::Number(n) => n.as_i64() == Some(0) || n.as_f64() == Some(0.0),
+        Value::String(s) => s == "0" || s.eq_ignore_ascii_case("success") || s.eq_ignore_ascii_case("ok"),
+        _ => true,
+    };
+    if ok {
+        return None;
+    }
+    let msg = fs_utils::dig(b, &["msg", "message"]).map(value_display).unwrap_or_default();
+    Some(if msg.is_empty() { format!("code {}", value_display(code)) } else { msg })
+}
+
+/// 成长任务：GET 列表 → 批量报名 `task_codes` → 已完成任务逐个 `reward/claim` 领奖。
+/// 不伪造行为事件：未完成任务只报名，等用户真实使用后再领奖。
+fn growth_tasks(agent: &ureq::Agent, headers: &[(String, String)], urls: &Urls) -> (String, String) {
+    let mut status = 0u16;
+    let mut body: Option<Value> = None;
+    let mut raw = String::new();
+    let mut used = urls.clone();
+    for candidate in task_list_candidates(urls.base) {
+        let (st, b, r) = wb_common::get_json(agent, &candidate.tasks, headers);
+        if st == 401 {
+            return ("auth".into(), "登录态失效（401）".into());
+        }
+        let has_list = b
+            .as_ref()
+            .and_then(|x| fs_utils::dig(x, &["tasks"]))
+            .and_then(Value::as_array)
+            .is_some();
+        status = st;
+        body = b;
+        raw = r;
+        if has_list {
+            used = candidate;
+            break;
+        }
+    }
+    let tasks: Vec<Value> = body
+        .as_ref()
+        .filter(|b| b.is_object() && status == 200)
+        .and_then(|b| fs_utils::dig(b, &["tasks"]))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if tasks.is_empty() {
         let head: String = raw.chars().take(60).collect();
-        let msg = if status != 0 {
-            format!("tasks 不可用（HTTP {status}）")
-        } else {
+        let msg = if status == 0 {
             format!("tasks 不可达: {head}")
+        } else {
+            format!("tasks 列表为空或格式变化（HTTP {status}）: {head}")
         };
         return ("fail".into(), msg);
     }
-    let b = body.as_ref().unwrap();
-    let tasks: Vec<&Value> = fs_utils::dig(b, &["tasks", "list", "records"])
-        .and_then(Value::as_array)
-        .map(|a| a.iter().collect())
-        .unwrap_or_default();
+
+    let mut accept_codes: Vec<String> = Vec::new();
+    let mut claim_codes: Vec<String> = Vec::new();
+    for t in &tasks {
+        let Some(code) = task_code_of(t) else { continue };
+        if task_needs_accept(t) && !accept_codes.contains(&code) {
+            accept_codes.push(code.clone());
+        }
+        if task_claimable(t) && !claim_codes.contains(&code) {
+            claim_codes.push(code);
+        }
+    }
+    let mut notes: Vec<String> = Vec::new();
+    let mut accepted = 0usize;
     let mut claimed = 0usize;
-    let mut skipped = 0usize;
-    for t in tasks {
-        let Some(obj) = t.as_object() else { continue };
-        if !py_truthy(obj.get("has_reward")) && fs_utils::dig(t, &["hasReward"]).is_none() {
-            continue;
-        }
-        // accept_status：顶层缺省时 dig 兜底；空值归一 ""（对齐 python `or ""` + str()）
-        let accept_status = obj
-            .get("accept_status")
-            .filter(|v| !v.is_null())
-            .or_else(|| fs_utils::dig(t, &["acceptStatus", "status"]))
-            .map(value_display)
-            .unwrap_or_default();
-        if ["1", "2", "claimed", "accepted", "已领取", "true", "True"].contains(&accept_status.as_str()) {
-            skipped += 1;
-            continue;
-        }
-        let code = obj
-            .get("task_code")
-            .filter(|v| !v.is_null())
-            .or_else(|| obj.get("taskCode").filter(|v| !v.is_null()))
-            .or_else(|| obj.get("code").filter(|v| !v.is_null()))
-            .cloned();
-        let accept_body = match &code {
-            Some(c) => json!({"task_code": c}),
-            None => json!({}),
-        };
-        let (st, _bb, _r) = wb_common::post_json_raw(agent, &urls.tasks_accept, headers, &accept_body);
+    if !accept_codes.is_empty() {
+        let (st, b, r) = wb_common::post_json_raw(
+            agent,
+            &used.tasks_accept,
+            headers,
+            &json!({"task_codes": accept_codes}),
+        );
         if st == 401 {
-            return ("auth".into(), format!("登录态失效（401，已领 {claimed} 项）"));
+            return ("auth".into(), "登录态失效（401，报名阶段）".into());
         }
-        if (200..=201).contains(&st) {
+        if (200..=201).contains(&st) && task_business_error(&b).is_none() {
+            accepted = accept_codes.len();
+        } else {
+            let detail = task_business_error(&b).unwrap_or_else(|| {
+                let head: String = r.chars().take(60).collect();
+                format!("HTTP {st} {head}")
+            });
+            notes.push(format!("报名失败：{detail}"));
+        }
+    }
+    for code in &claim_codes {
+        let (st, b, r) = wb_common::post_json_raw(
+            agent,
+            &used.tasks_reward_claim,
+            headers,
+            &json!({"task_code": code}),
+        );
+        if st == 401 {
+            return ("auth".into(), format!("登录态失效（401，领奖阶段，已领 {claimed} 项）"));
+        }
+        let biz = task_business_error(&b);
+        let already = biz.as_deref().is_some_and(|m| m.contains("已领") || m.to_ascii_lowercase().contains("already"));
+        if ((200..=201).contains(&st) && biz.is_none()) || already {
             claimed += 1;
+        } else {
+            let detail = biz.unwrap_or_else(|| {
+                let head: String = r.chars().take(60).collect();
+                format!("HTTP {st} {head}")
+            });
+            notes.push(format!("领奖失败（{code}）：{detail}"));
         }
     }
-    if claimed == 0 {
-        return ("skip".into(), format!("无可领奖励（已领 {skipped} 项）"));
+
+    let pending = tasks.iter().filter(|t| !task_claimable(t) && !task_claimed(t)).count();
+    let mut parts = vec![format!("报名 {accepted} 项"), format!("领取 {claimed} 项")];
+    if pending > 0 {
+        parts.push(format!("{pending} 项待完成"));
     }
-    ("ok".into(), format!("领取 {claimed} 项任务奖励"))
+    let has_notes = !notes.is_empty();
+    parts.extend(notes);
+    let kind = if accepted > 0 || claimed > 0 {
+        "ok"
+    } else if has_notes {
+        "fail"
+    } else {
+        "skip"
+    };
+    (kind.into(), parts.join(" / "))
 }
 
 /// 能量与连签天数（页面附注展示；对象响应归一为标量，防 [object Object]）。
@@ -1138,17 +1284,30 @@ fn process_account_growth(state: &AppState, agent: &ureq::Agent, acct: &Value, f
     let urls = urls_for(wb_common::region_billing_base(&creds.domain));
 
     let mut result = Map::new();
+    let mut step_fails = 0usize;
     if flags.travel {
         let (kind, msg) = with_retry(state, agent, &aid, &creds, |h| growth_travel(agent, h, &urls));
         result.insert("travel".into(), json!(if kind == "fail" { "fail" } else { msg.as_str() }));
+        if kind == "fail" {
+            step_fails += 1;
+        }
     }
     if flags.lottery {
         let (kind, msg) = with_retry(state, agent, &aid, &creds, |h| growth_lottery(agent, h, &urls));
         result.insert("lottery".into(), json!(if kind == "fail" { "fail" } else { msg.as_str() }));
+        if kind == "fail" {
+            step_fails += 1;
+        }
     }
     if flags.tasks {
         let (kind, msg) = with_retry(state, agent, &aid, &creds, |h| growth_tasks(agent, h, &urls));
-        result.insert("tasks".into(), json!(if kind == "fail" { "fail" } else { msg.as_str() }));
+        if kind == "fail" {
+            step_fails += 1;
+            let short: String = aid.chars().take(8).collect();
+            fs_utils::app_log(&state.data_dir, &format!("[wb-growth] {short} tasks: {msg}"));
+        }
+        // 报名/领奖失败时保留详细原因（含 HTTP 状态码）供 UI 排查，不折叠为裸 "fail"
+        result.insert("tasks".into(), json!(msg));
     }
     // 能量/连签（不带刷新重试，纯展示）
     let headers = wb_common::build_auth_headers(&creds, false);
@@ -1160,11 +1319,7 @@ fn process_account_growth(state: &AppState, agent: &ureq::Agent, acct: &Value, f
         .iter()
         .filter(|k| result.contains_key(**k))
         .count();
-    let fails = ["travel", "lottery", "tasks"]
-        .iter()
-        .filter(|k| result.get(**k).and_then(Value::as_str) == Some("fail"))
-        .count();
-    let status = if fails > 0 && fails == enabled { "fail" } else { "ok" };
+    let status = if step_fails > 0 && step_fails == enabled { "fail" } else { "ok" };
     let mut ev = json!({ "type": "growth", "user_id": aid, "name": base_ev["name"], "status": status });
     for (k, v) in result {
         ev[k.as_str()] = v;
@@ -1273,6 +1428,55 @@ mod wb_checkin_tests {
         let alt = u.alt();
         assert_eq!(alt.base, wb_common::BILLING_BASE_GLOBAL);
         assert_ne!(alt.checkin_do, u.checkin_do);
+    }
+
+    #[test]
+    fn growth_task_urls_cover_accept_and_reward_claim() {
+        let u = urls_for(wb_common::BILLING_BASE_CN);
+        assert!(u.tasks.ends_with("/v2/activity/growth/tasks"));
+        assert!(u.tasks_accept.ends_with("/tasks/accept"));
+        assert!(u.tasks_reward_claim.ends_with("/tasks/reward/claim"));
+        assert!(u.alt().tasks_reward_claim.contains(wb_common::BILLING_BASE_GLOBAL));
+        // CN 区任务链可探测 billing → activity → chat；Global 区只走自身域名
+        assert_eq!(task_list_candidates(wb_common::BILLING_BASE_CN).len(), 3);
+        assert_eq!(task_list_candidates(wb_common::BILLING_BASE_GLOBAL).len(), 1);
+    }
+
+    #[test]
+    fn growth_task_classification_matches_real_enums() {
+        let body = json!({"data": {"tasks": [
+            {"task_code": "a", "accept_status": "not_accepted", "has_reward": true},
+            {"task_code": "b", "accept_status": "accepted", "progress": {"current": 3, "target": 3}},
+            {"task_code": "c", "accept_status": "complete", "claimed": false},
+            {"task_code": "d", "accept_status": "complete", "claimed": true},
+            {"taskCode": "e", "status": "已完成"}
+        ]}});
+        let tasks = fs_utils::dig(&body, &["tasks"]).and_then(Value::as_array).unwrap();
+        let accept: Vec<String> = tasks
+            .iter()
+            .filter(|t| task_needs_accept(t))
+            .filter_map(task_code_of)
+            .collect();
+        assert_eq!(accept, vec!["a"]);
+        let claimable: Vec<String> = tasks.iter().filter(|t| task_claimable(t)).filter_map(task_code_of).collect();
+        assert_eq!(claimable, vec!["b", "c", "e"]);
+        assert!(task_claimed(&tasks[3]));
+        assert!(!task_claimable(&tasks[3]));
+        // has_reward=false 的未报名任务依然需要报名，不再被当作过滤门槛
+        assert!(task_needs_accept(&json!({"task_code": "f", "has_reward": false})));
+    }
+
+    #[test]
+    fn growth_task_business_error_reads_code_and_msg() {
+        assert!(task_business_error(&Some(json!({"code": 0, "msg": "ok"}))).is_none());
+        assert_eq!(
+            task_business_error(&Some(json!({"code": 400, "msg": "参数错误"}))),
+            Some("参数错误".to_string())
+        );
+        assert_eq!(
+            task_business_error(&Some(json!({"code": 500}))),
+            Some("code 500".to_string())
+        );
     }
 
     #[test]

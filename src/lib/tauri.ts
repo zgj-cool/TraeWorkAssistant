@@ -100,6 +100,7 @@ import type {
   QoderLiveLogins,
   QoderCreditsResult,
   QoderCreditsSnapshot,
+  QoderWebUsageToday,
   QoderEnvCheck,
   QoderIdeScanResult,
   QoderOauthDone,
@@ -770,6 +771,8 @@ export const api = {
     checkinTaskUnregister: () => invoke('qoder_checkin_task_unregister'),
     creditsFetch: (userId?: string, fresh?: boolean) =>
       invoke<QoderCreditsResult>('qoder_credits_fetch', { userId: userId ?? null, fresh: fresh ?? null }),
+    /** 官网网页会话今日积分消耗（自动读取客户端 Cookie；失败返回 ok=false） */
+    webUsageToday: () => invoke<QoderWebUsageToday>('qoder_web_usage_today'),
     creditsHistoryList: () =>
       invoke<{ snapshots: QoderCreditsSnapshot[] }>('qoder_credits_history_list'),
     /** Qoder 会话明细（issue #82 问题5：官网无明细接口，数据源为网关请求级本地流水 qoder_sessions） */

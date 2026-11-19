@@ -37,21 +37,61 @@ pub struct TrayMenu {
 /// 主窗口最大化状态记忆（issue #46）：无边框窗口（decorations:false）在最大化状态下
 /// 经 hide→show 后，Win32 层 WS_MAXIMIZE 样式与 Tauri 内部状态可能失同步——窗口视觉上
 /// 已还原但 isMaximized() 仍返回 true，此时 toggleMaximize 实际执行 unmaximize（空操作），
-/// 表现为「窗口无法最大化」。hide 前记录状态，show 时强制 unmaximize→maximize 重建。
-pub struct MainWindowMaximized(pub std::sync::atomic::AtomicBool);
+/// 表现为「窗口无法最大化」。
+///
+/// 同时记录隐藏时的外框尺寸（最大化尺寸）用于判定是否**真的**失同步：尺寸与隐藏时
+/// 一致 = 状态与视觉同步，无需重建。原实现无条件 unmaximize→maximize，会让窗口在
+/// 用户眼前从还原尺寸弹回最大化（缩放闪烁），体验很差。
+pub struct MainWindowMaximized {
+    pub maximized: std::sync::atomic::AtomicBool,
+    /// 隐藏时外框尺寸（物理像素，w << 32 | h；0 表示未记录）
+    pub outer_size: std::sync::atomic::AtomicU64,
+}
 
-/// 隐藏主窗口到托盘：hide 前记录最大化状态（issue #46）。返回是否找到主窗口。
+/// 外框尺寸比对容差（物理像素）：同一个最大化窗口隐藏前后只可能有 DPI 取整级差异
+const MAXIMIZED_SIZE_TOLERANCE_PX: u32 = 8;
+
+/// 隐藏前后外框尺寸是否一致：隐藏时记录的是最大化尺寸，show 前若明显变小即说明
+/// 视觉已还原而状态仍称最大化（issue #46 失同步形态）；未记录时视为一致。
+fn size_matches_recorded(hidden_size: u64, w: u32, h: u32) -> bool {
+    if hidden_size == 0 {
+        return true; // 无记录：不做无谓重建
+    }
+    let (rw, rh) = ((hidden_size >> 32) as u32, hidden_size as u32);
+    w.abs_diff(rw) <= MAXIMIZED_SIZE_TOLERANCE_PX && h.abs_diff(rh) <= MAXIMIZED_SIZE_TOLERANCE_PX
+}
+
+/// 隐藏主窗口到托盘：hide 前记录最大化状态与外框尺寸（issue #46）。返回是否找到主窗口。
 fn hide_main_window(app: &tauri::AppHandle) -> bool {
     if let Some(window) = app.get_webview_window("main") {
         let maximized = window.is_maximized().unwrap_or(false);
+        let packed_size = window
+            .outer_size()
+            .map(|s| ((s.width as u64) << 32) | s.height as u64)
+            .unwrap_or(0);
         if let Some(flag) = app.try_state::<MainWindowMaximized>() {
-            flag.0
+            flag.maximized
                 .store(maximized, std::sync::atomic::Ordering::Relaxed);
+            flag.outer_size
+                .store(packed_size, std::sync::atomic::Ordering::Relaxed);
         }
         let _ = window.hide();
         true
     } else {
         false
+    }
+}
+
+/// 「记录为最大化」的窗口在 show 前是否失同步：is_maximized() 为假（需重新最大化），
+/// 或为真但外框尺寸与隐藏时记录的最大化尺寸明显不符（视觉已还原）。
+/// 尺寸一致时返回 false，跳过 unmaximize→maximize，避免可见的缩放闪烁。
+fn maximized_state_desynced(window: &tauri::WebviewWindow, hidden_size: u64) -> bool {
+    if !window.is_maximized().unwrap_or(false) {
+        return true;
+    }
+    match window.outer_size() {
+        Ok(s) => !size_matches_recorded(hidden_size, s.width, s.height),
+        Err(_) => false,
     }
 }
 
@@ -199,17 +239,23 @@ fn repair_window_geometry(window: &tauri::WebviewWindow) {
     let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
 }
 
-/// 显示主窗口：unminimize + show + set_focus；若隐藏前为最大化，则强制
-/// unmaximize→maximize 重建最大化状态（issue #46：即使内部状态已失同步也能恢复）。
-/// show 前校验窗口几何，失效（休眠唤醒/显示器变更后落到屏外或尺寸退化）则
-/// 平移回最近显示器工作区并保留用户尺寸（issue #183：表现为任务栏有图标但
-/// 主页面无法显示、缩略图只有一条线）。
+/// 显示主窗口：unminimize + show + set_focus。修复动作全部在 show 之前完成
+/// （窗口仍隐藏，用户看不到中间过程），避免从托盘恢复时出现「尺寸由小到大」的闪烁：
+/// - 几何失效（休眠唤醒/显示器变更后落到屏外或尺寸退化）→ 平移回最近显示器工作区
+///   并保留用户尺寸（issue #183：任务栏有图标但主页面无法显示、缩略图只有一条线）；
+/// - 隐藏前为最大化但状态/视觉已失同步（issue #46）→ 才 unmaximize→maximize 重建；
+///   状态与尺寸都正常时不再重建（原实现无条件重建，正是缩放闪烁的来源）。
 fn show_main_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
-        let was_maximized = app
+        let (was_maximized, hidden_size) = app
             .try_state::<MainWindowMaximized>()
-            .map(|f| f.0.load(std::sync::atomic::Ordering::Relaxed))
-            .unwrap_or(false);
+            .map(|f| {
+                (
+                    f.maximized.load(std::sync::atomic::Ordering::Relaxed),
+                    f.outer_size.load(std::sync::atomic::Ordering::Relaxed),
+                )
+            })
+            .unwrap_or((false, 0));
         let _ = window.unminimize();
         if !window_geometry_valid(&window) {
             if let Some(st) = app.try_state::<AppState>() {
@@ -221,12 +267,20 @@ fn show_main_window(app: &tauri::AppHandle) {
             let _ = window.unmaximize();
             repair_window_geometry(&window);
         }
-        let _ = window.show();
-        let _ = window.set_focus();
-        if was_maximized {
+        // 仅在确实失同步时重建最大化，且重建发生在 show 之前：窗口仍隐藏，
+        // 中间的「还原尺寸」不会被用户看到（issue #46 + 托盘恢复缩放闪烁）
+        if was_maximized && maximized_state_desynced(&window, hidden_size) {
+            if let Some(st) = app.try_state::<AppState>() {
+                fs_utils::app_log(
+                    &st.data_dir,
+                    "显示主窗口：最大化状态失同步，show 前重建（避免可见缩放）",
+                );
+            }
             let _ = window.unmaximize();
             let _ = window.maximize();
         }
+        let _ = window.show();
+        let _ = window.set_focus();
     }
 }
 
@@ -306,7 +360,10 @@ fn main() {
             None,
         ))
         .manage(state)
-        .manage(MainWindowMaximized(std::sync::atomic::AtomicBool::new(false)))
+        .manage(MainWindowMaximized {
+            maximized: std::sync::atomic::AtomicBool::new(false),
+            outer_size: std::sync::atomic::AtomicU64::new(0),
+        })
         .manage(Mutex::new(Option::<commands::api_server::ApiServerRuntime>::None))
         .manage(commands::checkin::CheckinGuard(tokio::sync::Mutex::new(())))
         .invoke_handler(tauri::generate_handler![
@@ -600,6 +657,7 @@ fn main() {
             commands::qoder::qoder_checkin_task_status,
             commands::qoder::qoder_checkin_task_unregister,
             commands::qoder::qoder_credits_fetch,
+            commands::qoder::qoder_web_usage_today,
             commands::qoder::qoder_credits_history_list,
             commands::qoder::qoder_sessions_query,
             commands::qoder::qoder_session_detail_query,
@@ -1074,5 +1132,19 @@ mod geometry_tests {
         assert_eq!(repaired_geometry(100, 100, 100, 800, &hidpi), (0, 0, 1360, 768));
         // 未越界窗口不改变位置（保留用户相对摆放）
         assert_eq!(repaired_geometry(300, 200, 1280, 800, &m), (300, 200, 1280, 800));
+    }
+
+    /// 托盘恢复缩放闪烁：尺寸与隐藏时记录的最大化尺寸一致 → 无需重建；
+    /// 明显变小（视觉已还原而状态仍称最大化）→ 判定失同步需要重建
+    #[test]
+    fn recorded_size_identifies_maximized_desync() {
+        let recorded = (1920u64 << 32) | 1040u64;
+        assert!(size_matches_recorded(recorded, 1920, 1040));
+        // 容差内（DPI 取整差异）仍视为一致，避免误触发重建
+        assert!(size_matches_recorded(recorded, 1926, 1046));
+        // 还原尺寸（1180x760）明显偏小 → 失同步
+        assert!(!size_matches_recorded(recorded, 1180, 760));
+        // 未记录时一律视为一致，不做无谓重建
+        assert!(size_matches_recorded(0, 1180, 760));
     }
 }

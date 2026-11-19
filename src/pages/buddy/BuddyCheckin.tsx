@@ -374,7 +374,7 @@ export default function BuddyCheckin() {
             />
             <span className="text-sm">
               任务领奖
-              <span className="block text-xs text-slate-400">自动领取已完成任务奖励</span>
+              <span className="block text-xs text-slate-400">批量报名未报名任务，并领取已完成任务的奖励（不代替实际使用）</span>
             </span>
           </label>
         </div>
