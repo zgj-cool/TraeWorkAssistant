@@ -96,7 +96,8 @@ export default function TokensTab({
   gateway: GatewayDays | null;
 }) {
   const isDark = useIsDark();
-  const { range, setRange, startStr, todayStr, dateList } = useDateRange('7d');
+  // 统计周期默认「今日」（与积分统计 Tab 一致）
+  const { range, setRange, startStr, todayStr, dateList } = useDateRange('today');
   const [modelFilter, setModelFilter] = useState('');
   // 切源时清空模型筛选：旧源的模型在新源列表中不存在，残留会让趋势静默归零（审查修复）
   useEffect(() => setModelFilter(''), [source]);

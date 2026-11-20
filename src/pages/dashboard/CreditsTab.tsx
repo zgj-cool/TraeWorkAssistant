@@ -95,7 +95,8 @@ export default function CreditsTab({
   uidSet: Set<string> | null;
 }) {
   const isDark = useIsDark();
-  const { range, setRange, startStr, todayStr, dateList } = useDateRange('7d');
+  // 统计周期默认「今日」（用户习惯先看当日消耗；需要跨日再手动切 7/30 天）
+  const { range, setRange, startStr, todayStr, dateList } = useDateRange('today');
   const [modelFilter, setModelFilter] = useState('');
   // 切源时清空模型筛选：旧源的模型在新源列表中不存在，残留会让趋势静默归零（审查修复）
   useEffect(() => setModelFilter(''), [source]);

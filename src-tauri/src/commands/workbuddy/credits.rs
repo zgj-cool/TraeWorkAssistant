@@ -1111,6 +1111,8 @@ pub(crate) fn workbuddy_usage_official_all_impl(
     // 逐账号拉取 + 按日/按模型聚合（单账号失败跳过，不让一个失效凭证拖垮整板趋势）
     let mut daily_credits: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
     let mut model_totals: std::collections::HashMap<String, (u64, f64)> = std::collections::HashMap::new();
+    // 逐账号用量明细（总览页「各账号积分消耗明细」数据源；仅成功账号入列）
+    let mut accounts_out: Vec<serde_json::Value> = Vec::new();
     let mut ok = 0usize;
     let mut req_total = 0u64;
     for (id, token, domain) in &list {
@@ -1127,6 +1129,15 @@ pub(crate) fn workbuddy_usage_official_all_impl(
             .unwrap_or_default();
         save_account_session_rows(state, id, &acct_name, &session_rows, true);
         req_total += p.get("request_count_total").and_then(Value::as_u64).unwrap_or(0);
+        // 账号级今日/7 日/本月用量（聚合前逐账号留存；旧缓存无该字段，前端按缺省处理）
+        let summary = p.get("summary").cloned().unwrap_or_default();
+        accounts_out.push(serde_json::json!({
+            "user_id": id,
+            "name": acct_name,
+            "usage_today": summary.get("usage_today").and_then(Value::as_f64).unwrap_or(0.0),
+            "usage_7days": summary.get("usage_7days").and_then(Value::as_f64).unwrap_or(0.0),
+            "usage_this_month": summary.get("usage_this_month").and_then(Value::as_f64).unwrap_or(0.0),
+        }));
         for row in p.get("daily").and_then(Value::as_array).into_iter().flatten() {
             let Some(date) = row.get("date").and_then(Value::as_str) else { continue };
             let Some(u) = row.get("usage").and_then(Value::as_f64) else { continue };
@@ -1153,6 +1164,11 @@ pub(crate) fn workbuddy_usage_official_all_impl(
     models_out.sort_by(|a, b| {
         let ca = a.get("credit").and_then(Value::as_f64).unwrap_or(0.0);
         let cb = b.get("credit").and_then(Value::as_f64).unwrap_or(0.0);
+        cb.partial_cmp(&ca).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    accounts_out.sort_by(|a, b| {
+        let ca = a.get("usage_today").and_then(Value::as_f64).unwrap_or(0.0);
+        let cb = b.get("usage_today").and_then(Value::as_f64).unwrap_or(0.0);
         cb.partial_cmp(&ca).unwrap_or(std::cmp::Ordering::Equal)
     });
 
@@ -1196,6 +1212,7 @@ pub(crate) fn workbuddy_usage_official_all_impl(
         },
         "daily": daily_out,
         "models": models_out,
+        "accounts": accounts_out,
     });
     let _ = crate::store::db(&state.data_dir).kv_set(cache_path, &payload);
     fs_utils::app_log(

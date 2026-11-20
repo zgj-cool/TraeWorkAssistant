@@ -1713,6 +1713,14 @@ export interface WbUsageOfficialAll {
   daily: { date: string; usage: number }[];
   /** 按模型汇总（31 天全窗口、跨账号合并；stale 旧缓存可能缺省） */
   models?: WbUsageModelPoint[];
+  /** 逐账号官方用量（总览页「各账号积分消耗明细」数据源；旧缓存/旧版本缺省） */
+  accounts?: {
+    user_id: string;
+    name: string;
+    usage_today: number;
+    usage_7days: number;
+    usage_this_month: number;
+  }[];
 }
 
 /** 活动信息三端点聚合（F-51）：banner（公开）+ 付费类型 + 用量提醒 */

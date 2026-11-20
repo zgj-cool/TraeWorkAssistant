@@ -5,7 +5,7 @@ import { Badge, Spinner, StatCard } from '../components/ui';
 import { api } from '../lib/tauri';
 import { fmtCredits, fmtTokens } from '../lib/format';
 import { withMinDelay } from '../lib/delay';
-import { useAppStore } from '../store';
+import { useAppStore, type BoardNavIntent } from '../store';
 import type {
   QoderCreditsResult,
   UsageDayView,
@@ -117,8 +117,8 @@ export default function Overview() {
     );
   };
 
-  const goPlatform = (key: keyof typeof PLATFORMS, target: ViewKey) =>
-    openPlatformView(PLATFORMS[key].app, target);
+  const goPlatform = (key: keyof typeof PLATFORMS, target: ViewKey, nav?: BoardNavIntent) =>
+    openPlatformView(PLATFORMS[key].app, target, nav);
 
   return (
     <div className="animate-fade-in">
@@ -172,8 +172,9 @@ export default function Overview() {
               <PlatformCard
                 key={p.key}
                 summary={p}
+                creditRows={view.credits.rows.filter((r) => r.platform === p.key)}
                 poolTokens={view.tokens.byPlatform[p.key]}
-                onGo={(target) => goPlatform(p.key, target)}
+                onGo={(target, nav) => goPlatform(p.key, target, nav)}
               />
             ))
           : [0, 1, 2].map((i) => <div key={i} className="card h-80 animate-pulse bg-slate-200/40 dark:bg-zinc-900" />)}

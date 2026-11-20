@@ -5,7 +5,7 @@ import PageHeader from '../../components/PageHeader';
 import { MultiSelectDropdown } from '../../components/MultiSelectDropdown';
 import { SOURCE_LABELS, SOURCES, type BoardSource } from '../../components/ChartFilterBar';
 import { api } from '../../lib/tauri';
-import { useAppStore } from '../../store';
+import { useAppStore, type BoardTab } from '../../store';
 import { withMinDelay } from '../../lib/delay';
 import { fmtCredits, dateStrToEndTs } from '../../lib/format';
 import KpiRow, { type PlatformKpi, type PlatformScope } from './KpiRow';
@@ -43,8 +43,6 @@ import type {
  * 布局：PageHeader（标题+概述）→ KPI 7 卡 → Tab 工具行（Tab 切换 + 刷新）→ Tab 内容。
  */
 
-type BoardTab = 'credits' | 'tokens' | 'expiry' | 'sessions';
-
 const TABS: { key: BoardTab; label: string }[] = [
   { key: 'credits', label: '积分统计' },
   { key: 'tokens', label: 'Token 统计' },
@@ -65,6 +63,7 @@ function localDate(d: Date): string {
 
 export default function CreditsDashboard({ platform }: { platform: 'trae' | 'buddy' | 'qoder' }) {
   const pushToast = useAppStore((s) => s.pushToast);
+  const consumePendingBoardNav = useAppStore((s) => s.consumePendingBoardNav);
   const accounts = useAppStore((s) => s.accounts);
   const creditsDaily = useAppStore((s) => s.creditsDaily);
   const creditsHistory = useAppStore((s) => s.creditsHistory);
@@ -100,6 +99,18 @@ export default function CreditsDashboard({ platform }: { platform: 'trae' | 'bud
   const [tokensSource, setTokensSource] = useState<BoardSource>(
     platform === 'trae' ? 'official' : platform === 'qoder' ? 'gateway' : 'local',
   );
+
+  // 总览页直达指定 Tab / 数据源（如 Token 消耗 → Token 统计 + 网关源）：
+  // 挂载时一次性消费，避免下次进入看板仍停留在上次跳转的 Tab
+  useEffect(() => {
+    const nav = consumePendingBoardNav();
+    if (!nav) return;
+    setTab(nav.tab);
+    if (nav.source) {
+      if (nav.tab === 'credits') setCreditsSource(nav.source);
+      else if (nav.tab === 'tokens') setTokensSource(nav.source);
+    }
+  }, [consumePendingBoardNav]);
   // 会话明细 Tab 联动刷新键（refresh 完成后 +1 触发重查缓存，issue #82）
   const [sessionsRefreshKey, setSessionsRefreshKey] = useState(0);
 

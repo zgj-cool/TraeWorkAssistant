@@ -62,6 +62,28 @@ export interface TokenSummary {
   byPlatform: Record<PlatformKey, TokenPoolSummary>;
 }
 
+/** 逐账号今日积分消耗（总览页「各账号积分消耗明细」） */
+export interface CreditUsageRow {
+  id: string;
+  platform: PlatformKey;
+  uid: string;
+  name: string;
+  /** 今日消耗积分；null = 该账号无账号级消耗数据 */
+  credits: number | null;
+  /** 数据来源 / 缺失原因（表格副文案） */
+  source: string;
+}
+
+export interface CreditUsageSummary {
+  /** 有账号级数据的账号合计消耗；全部缺失为 null */
+  total: number | null;
+  /** 有账号级数据的账号数 */
+  withData: number;
+  /** 三平台账号总数 */
+  accounts: number;
+  rows: CreditUsageRow[];
+}
+
 export interface PlatformAlert {
   id: string;
   platform: PlatformKey;
@@ -481,6 +503,77 @@ export function summarizeGatewayTokens(data: OverviewData, nowMs = Date.now()): 
   };
 }
 
+/**
+ * 逐账号今日积分消耗明细。
+ * 口径：Trae = 官网消耗明细逐账号当日 credits；Buddy = 官网全账号用量的逐账号
+ * usage_today（本次新增字段，旧缓存缺省时标注仅合计口径）；Qoder = 本地积分快照
+ * 前后两日余额差分（官网无逐账号按日消耗接口，含签到奖励时可能低估，负值记 0）。
+ * 无账号级数据的账号仍列出（credits=null + 缺失原因），避免误以为账号缺失。
+ */
+export function summarizeCreditUsage(data: OverviewData, nowMs = Date.now()): CreditUsageSummary {
+  const today = localDate(nowMs);
+  const rows: CreditUsageRow[] = [];
+
+  const traeUsageByUid = new Map((data.traeUsage?.accounts ?? []).map((a) => [a.user_id, a]));
+  for (const a of data.traeAccounts) {
+    const day = traeUsageByUid.get(a.user_id)?.daily.find((d) => d.date.slice(0, 10) === today);
+    rows.push({
+      id: `trae-${a.user_id}`,
+      platform: 'trae',
+      uid: a.user_id,
+      name: a.name,
+      credits: day?.credits != null ? round(day.credits) : null,
+      source:
+        day?.credits != null
+          ? '官网消耗明细'
+          : data.traeUsage
+            ? '官网当日无明细'
+            : '官网明细未加载',
+    });
+  }
+
+  const wbByUid = new Map((data.wbOfficial?.accounts ?? []).map((a) => [a.user_id, a]));
+  for (const a of data.wbAccounts) {
+    const rec = wbByUid.get(a.id);
+    rows.push({
+      id: `buddy-${a.id}`,
+      platform: 'buddy',
+      uid: a.id,
+      name: a.nickname,
+      credits: rec ? round(rec.usage_today) : null,
+      source: rec ? '官网用量（逐账号）' : data.wbOfficial ? '官网仅合计口径' : '官网用量未加载',
+    });
+  }
+
+  const snaps = [...(data.qoderSnapshots ?? [])].sort((x, y) => x.date.localeCompare(y.date));
+  const todaySnap = snaps.find((s) => s.date.slice(0, 10) === today) ?? null;
+  const prevSnap = todaySnap
+    ? ([...snaps].reverse().find((s) => s.date.slice(0, 10) < today) ?? null)
+    : null;
+  for (const a of data.qoderAccounts) {
+    const cur = todaySnap?.accounts?.find((x) => x.user_id === a.id)?.total ?? null;
+    const prev = prevSnap?.accounts?.find((x) => x.user_id === a.id)?.total ?? null;
+    const used = cur != null && prev != null ? Math.max(0, round(prev - cur)) : null;
+    rows.push({
+      id: `qoder-${a.id}`,
+      platform: 'qoder',
+      uid: a.id,
+      name: a.nickname,
+      credits: used,
+      source: used != null ? '快照差分' : todaySnap ? '快照无前一日对比' : '今日快照未更新',
+    });
+  }
+
+  rows.sort(
+    (a, b) => (b.credits ?? -1) - (a.credits ?? -1) || a.name.localeCompare(b.name),
+  );
+  const withData = rows.filter((r) => r.credits != null).length;
+  const total = withData
+    ? round(rows.reduce((n, r) => n + (r.credits ?? 0), 0))
+    : null;
+  return { total, withData, accounts: rows.length, rows };
+}
+
 /** 三平台汇总（今日已用：Trae/Buddy 官网，Qoder 官网会话优先、本地快照回退） */
 export function aggregateKpis(summaries: PlatformSummary[]): OverviewKpis {
   return {
@@ -497,6 +590,7 @@ export function buildOverview(data: OverviewData): {
   platforms: PlatformSummary[];
   kpis: OverviewKpis;
   tokens: TokenSummary;
+  credits: CreditUsageSummary;
 } {
   const now = data.nowMs ?? Date.now();
   const platforms = [
@@ -511,5 +605,10 @@ export function buildOverview(data: OverviewData): {
       now,
     ),
   ];
-  return { platforms, kpis: aggregateKpis(platforms), tokens: summarizeGatewayTokens(data, now) };
+  return {
+    platforms,
+    kpis: aggregateKpis(platforms),
+    tokens: summarizeGatewayTokens(data, now),
+    credits: summarizeCreditUsage(data, now),
+  };
 }

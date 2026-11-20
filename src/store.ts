@@ -23,7 +23,7 @@ import type {
   ViewKey,
   AppKey,
 } from './types';
-import { APP_HOME_VIEW } from './types';
+import { resolveAppSwitchView } from './lib/appNav';
 
 export type ToastKind = 'info' | 'success' | 'error' | 'warn';
 export interface Toast {
@@ -68,6 +68,19 @@ export interface LogQuery {
   limit?: number;
 }
 
+/** 积分看板内部 Tab（与 Dashboard TABS 一致；跨页面跳转参数契约） */
+export type BoardTab = 'credits' | 'tokens' | 'expiry' | 'sessions';
+
+/** 数据源口径（与 ChartFilterBar BoardSource 同构，避免 store 依赖组件层） */
+export type BoardSourceKey = 'local' | 'gateway' | 'official';
+
+/** 跳转积分看板的预选参数（Tab + 数据源）：总览页按指标口径直达对应视图 */
+export interface BoardNavIntent {
+  tab: BoardTab;
+  /** 指定数据源时目标 Tab 同步切换（如 Token 消耗 = 网关源） */
+  source?: BoardSourceKey;
+}
+
 interface AppState {
   ready: boolean;
   view: ViewKey;
@@ -110,13 +123,17 @@ interface AppState {
   /** Trae 双应用合并升级引导弹窗（首启有迁移报告时弹出，关闭落标记后不再展示） */
   traeworkGuideOpen: boolean;
   traeworkGuide: TraeWorkMigrationReport | null;
+  /** 跳转积分看板的预选参数（一次性消费：目标页读取后清空，避免下次进入仍停留旧参数） */
+  pendingBoardNav: BoardNavIntent | null;
 
   init: () => Promise<void>;
   setView: (v: ViewKey) => void;
   /** 切换侧边栏应用 Tab，并跳到该应用默认首页 */
   setActiveApp: (app: AppKey) => void;
-  /** 从总览页直达指定平台的指定页面：一次性写入，避免 setActiveApp 把 view 重置为首页 */
-  openPlatformView: (app: AppKey, view: ViewKey) => void;
+  /** 从总览页直达指定平台的指定页面（可指定积分看板 Tab/数据源）：一次性写入，避免 setActiveApp 把 view 重置为首页 */
+  openPlatformView: (app: AppKey, view: ViewKey, boardNav?: BoardNavIntent | null) => void;
+  /** 取走并清空 pendingBoardNav（目标页挂载时调用） */
+  consumePendingBoardNav: () => BoardNavIntent | null;
   applyCheckinEvent: (e: CheckinProgressEvent) => void;
   /** Qoder 签到 NDJSON 进度归约（start/done/逐账号行/exit；skipped_busy 与
    * empty 计数口径对齐 Rust 侧） */
@@ -358,6 +375,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   // 首屏默认进入全平台总览（平台无关视图），应用 Tab 仍保留上次平台上下文
   view: 'overview',
   activeApp: 'trae',
+  pendingBoardNav: null,
   env: null,
   certInstalled: false,
   proxy: { running: false, port: 0, captured: 0, started_at: null },
@@ -576,9 +594,17 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
-  setView: (v) => set({ view: v }),
-  setActiveApp: (app) => set({ activeApp: app, view: APP_HOME_VIEW[app] }),
-  openPlatformView: (app, view) => set({ activeApp: app, view }),
+  setView: (v) => set({ view: v, pendingBoardNav: null }),
+  // 切换应用保持当前功能页（积分看板 ⇄ 积分看板、账号 ⇄ 账号…）；无对应页才回落首页
+  setActiveApp: (app) =>
+    set({ activeApp: app, view: resolveAppSwitchView(get().view, app), pendingBoardNav: null }),
+  openPlatformView: (app, view, boardNav = null) =>
+    set({ activeApp: app, view, pendingBoardNav: boardNav ?? null }),
+  consumePendingBoardNav: () => {
+    const nav = get().pendingBoardNav;
+    if (nav) set({ pendingBoardNav: null });
+    return nav;
+  },
   setShowApiManager: (v) => set({ showApiManager: v }),
   dismissTraeworkGuide: async () => {
     // 先收起弹窗再落标记：标记写失败（下次启动会再弹）不静默，toast 明示

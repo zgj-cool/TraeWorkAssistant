@@ -1,11 +1,17 @@
 import type { ReactNode } from 'react';
-import { AlertTriangle, ChevronRight, Clock3, Coins } from 'lucide-react';
+import { AlertTriangle, ChevronRight, Clock3, Coins, TrendingDown } from 'lucide-react';
 import { Badge } from '../../components/ui';
 import { cn } from '../../lib/cn';
 import { fmtCredits, fmtTokens } from '../../lib/format';
 import type { AppKey, ViewKey } from '../../types';
+import type { BoardNavIntent } from '../../store';
 import { APP_LOGOS } from '../../lib/appLogos';
-import type { PlatformKey, PlatformSummary, TokenPoolSummary } from './overviewModel';
+import type {
+  CreditUsageRow,
+  PlatformKey,
+  PlatformSummary,
+  TokenPoolSummary,
+} from './overviewModel';
 
 export const PLATFORMS: Record<
   PlatformKey,
@@ -17,7 +23,6 @@ export const PLATFORMS: Record<
     home: ViewKey;
     accounts: ViewKey;
     credits: ViewKey;
-    apiService: ViewKey;
   }
 > = {
   trae: {
@@ -27,7 +32,6 @@ export const PLATFORMS: Record<
     home: 'dashboard',
     accounts: 'accounts',
     credits: 'credits',
-    apiService: 'api-service',
   },
   buddy: {
     label: 'Buddy',
@@ -36,7 +40,6 @@ export const PLATFORMS: Record<
     home: 'buddy-overview',
     accounts: 'buddy-accounts',
     credits: 'buddy-credits',
-    apiService: 'buddy-api-service',
   },
   qoder: {
     label: 'Qoder',
@@ -45,7 +48,6 @@ export const PLATFORMS: Record<
     home: 'qoder-overview',
     accounts: 'qoder-accounts',
     credits: 'qoder-credits',
-    apiService: 'qoder-api-service',
   },
 };
 
@@ -170,16 +172,25 @@ function ListRow({
 
 export function PlatformCard({
   summary,
+  creditRows,
   poolTokens,
   onGo,
 }: {
   summary: PlatformSummary;
+  /** 该平台的逐账号今日积分消耗（缺失时按空态渲染） */
+  creditRows?: CreditUsageRow[];
   /** 该平台池的今日网关 Token（缺失时按无数据渲染） */
   poolTokens?: TokenPoolSummary;
-  onGo: (view: ViewKey) => void;
+  /** 跳转目标页（可附带积分看板 Tab/数据源，如 Token 统计 + 网关源；账号页忽略该参数） */
+  onGo: (view: ViewKey, nav?: BoardNavIntent) => void;
 }) {
   const meta = PLATFORMS[summary.key];
   const alert = summary.alertAccounts > 0;
+  const credits = creditRows ?? [];
+  const creditsWithData = credits.filter((r) => r.credits != null);
+  const creditsTotal = creditsWithData.length
+    ? Math.round(creditsWithData.reduce((n, r) => n + (r.credits ?? 0), 0) * 100) / 100
+    : null;
   const tokens: TokenPoolSummary = poolTokens ?? { prompt: null, completion: null, total: null, rows: [] };
   /** 账号级明细合计（用于标注与池合计之间的历史差额） */
   const rowsTotal = tokens.rows.reduce((n, r) => n + r.total_tokens, 0);
@@ -233,13 +244,13 @@ export function PlatformCard({
           label="今日 Token"
           value={tokens.total == null ? '—' : fmtTokens(tokens.total)}
           hint={tokenHint}
-          onClick={() => onGo(meta.apiService)}
+          onClick={() => onGo(meta.credits, { tab: 'tokens', source: 'gateway' })}
         />
         <MetricCell
           label="7 天内到期积分"
           value={valueOrDash(summary.expiringIn7d)}
           hint="仅计剩余 > 0 的积分包"
-          onClick={() => onGo(meta.credits)}
+          onClick={() => onGo(meta.credits, { tab: 'expiry' })}
           warn={(summary.expiringIn7d ?? 0) > 0}
         />
         <MetricCell
@@ -250,6 +261,42 @@ export function PlatformCard({
           warn={alert}
         />
       </div>
+
+      {/* 积分消耗明细（逐账号）：常驻展示，置于 Token 明细之上 */}
+      <CardSection
+        icon={<TrendingDown size={11} className="text-amber-500" />}
+        title="各账号积分消耗明细"
+        meta={
+          creditsWithData.length > 0
+            ? `${creditsWithData.length}/${credits.length} 个账号 · ${fmtCredits(creditsTotal ?? 0)}`
+            : '暂无账号级数据'
+        }
+        metaClass={
+          creditsWithData.length > 0
+            ? 'text-amber-600 dark:text-amber-400'
+            : 'text-slate-400'
+        }
+      >
+        {credits.length === 0 ? (
+          <p className="px-1.5 py-1 text-[11px] leading-relaxed text-slate-400">
+            本平台暂无账号，导入账号后这里会按账号展示今日积分消耗。
+          </p>
+        ) : (
+          credits.map((r) => (
+            <ListRow
+              key={r.id}
+              title={r.name || r.uid}
+              sub={r.source}
+              right={r.credits == null ? '—' : fmtCredits(r.credits)}
+              rightClass={
+                r.credits == null ? 'text-slate-400' : 'text-amber-600 dark:text-amber-400'
+              }
+              hint="前往积分看板"
+              onClick={() => onGo(meta.credits)}
+            />
+          ))
+        )}
+      </CardSection>
 
       {/* Token 明细栏常驻展示：无数据也占位，避免被误认为功能缺失 */}
       <CardSection
@@ -279,8 +326,8 @@ export function PlatformCard({
                 sub={`输入 ${fmtTokens(r.prompt_tokens)} / 输出 ${fmtTokens(r.completion_tokens)}`}
                 right={fmtTokens(r.total_tokens)}
                 rightClass="text-violet-600 dark:text-violet-400"
-                hint="前往 API 服务 · 用量统计"
-                onClick={() => onGo(meta.apiService)}
+                hint="前往积分看板 · Token 统计"
+                onClick={() => onGo(meta.credits, { tab: 'tokens', source: 'gateway' })}
               />
             ))}
             {rowsTotal < (tokens.total ?? 0) && (
@@ -318,7 +365,7 @@ export function PlatformCard({
               right={d.credits == null ? '金额未刷新' : fmtCredits(d.credits)}
               rightClass="text-amber-600 dark:text-amber-400"
               hint="查看积分包明细"
-              onClick={() => onGo(d.view)}
+              onClick={() => onGo(d.view, { tab: 'expiry' })}
             />
           ))
         )}
@@ -354,3 +401,5 @@ export function PlatformCard({
     </section>
   );
 }
+
+

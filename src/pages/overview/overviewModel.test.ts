@@ -3,6 +3,7 @@ import {
   aggregateKpis,
   buildOverview,
   summarizeBuddy,
+  summarizeCreditUsage,
   summarizeGatewayTokens,
   summarizeQoder,
   summarizeTrae,
@@ -243,6 +244,56 @@ describe('summarizeQoder 与汇总', () => {
     expect(empty.available).toBeNull();
     expect(empty.usedToday).toBeNull();
     expect(empty.expiringIn7d).toBeNull();
+  });
+});
+
+describe('summarizeCreditUsage', () => {
+  it('Trae/Buddy 取逐账号官网口径、Qoder 取快照差分，按消耗降序', () => {
+    const data = emptyData();
+    data.traeAccounts = [{ user_id: 't1', name: 'Trae甲' }] as AccountView[];
+    data.traeUsage = {
+      cached: false,
+      accounts: [{ user_id: 't1', daily: [{ date: '2026-11-19', credits: 12.5 }] }],
+    } as UsageHistoryResult;
+    data.wbAccounts = [{ id: 'b1', nickname: 'Buddy甲' }] as WorkBuddyAccountView[];
+    data.wbOfficial = {
+      summary: { usage_today: 8, usage_7days: 8, usage_this_month: 8 },
+      daily: [],
+      accounts: [
+        { user_id: 'b1', name: 'Buddy甲', usage_today: 8, usage_7days: 8, usage_this_month: 8 },
+      ],
+    } as unknown as WbUsageOfficialAll;
+    data.qoderAccounts = [{ id: 'q1', nickname: 'Qoder甲' }] as QoderAccountView[];
+    data.qoderSnapshots = [
+      { date: '2026-11-18', ts: 0, total_balance: 100, accounts: [{ user_id: 'q1', total: 100 }] },
+      { date: '2026-11-19', ts: 0, total_balance: 90, accounts: [{ user_id: 'q1', total: 90 }] },
+    ];
+
+    const s = summarizeCreditUsage(data, NOW);
+    expect(s.accounts).toBe(3);
+    expect(s.withData).toBe(3);
+    expect(s.total).toBe(30.5);
+    expect(s.rows.map((r) => [r.platform, r.name, r.credits])).toEqual([
+      ['trae', 'Trae甲', 12.5],
+      ['qoder', 'Qoder甲', 10],
+      ['buddy', 'Buddy甲', 8],
+    ]);
+  });
+
+  it('无账号级数据时列出账号但 credits=null，合计为 null', () => {
+    const data = emptyData();
+    data.traeAccounts = [{ user_id: 't1', name: 'Trae甲' }] as AccountView[];
+    data.wbAccounts = [{ id: 'b1', nickname: 'Buddy甲' }] as WorkBuddyAccountView[];
+    data.qoderAccounts = [{ id: 'q1', nickname: 'Qoder甲' }] as QoderAccountView[];
+
+    const s = summarizeCreditUsage(data, NOW);
+    expect(s.accounts).toBe(3);
+    expect(s.withData).toBe(0);
+    expect(s.total).toBeNull();
+    expect(s.rows.every((r) => r.credits === null)).toBe(true);
+    // 缺失原因逐行给出，便于区分「未加载 / 无明细 / 无前一日对比」
+    expect(s.rows.find((r) => r.platform === 'trae')?.source).toContain('未加载');
+    expect(s.rows.find((r) => r.platform === 'qoder')?.source).toContain('快照');
   });
 });
 

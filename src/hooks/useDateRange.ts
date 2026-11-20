@@ -35,7 +35,8 @@ export interface DateRange {
   dateList: string[];
 }
 
-export function useDateRange(initial: RangeKey = '7d'): DateRange {
+/** 统计周期默认「今日」（积分看板 Token/积分统计 Tab 口径；调用方可显式覆盖） */
+export function useDateRange(initial: RangeKey = 'today'): DateRange {
   const [range, setRange] = useState<RangeKey>(initial);
   return useMemo(() => {
     const today = new Date();
