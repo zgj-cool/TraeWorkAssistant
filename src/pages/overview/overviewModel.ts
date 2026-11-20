@@ -6,6 +6,7 @@ import type {
   QoderCreditsResult,
   QoderCreditsSnapshot,
   QoderWebUsageToday,
+  UsageDayView,
   UsageHistoryResult,
   ViewKey,
   WbCheckinRecord,
@@ -23,6 +24,43 @@ const EXPIRY_SEC = 7 * DAY_SEC;
 
 /** 总览只展示积分型平台（豆包为额度口径，不参与本页） */
 export type PlatformKey = 'trae' | 'buddy' | 'qoder';
+
+/** API 网关用量桶（Token 统计来源；与三平台分账口径一一对应 + 自定义/BuddyAI 独立桶） */
+export type GatewayPoolKey = 'trae' | 'buddy' | 'buddy-ai' | 'custom' | 'qoder';
+
+/** 网关账号 token 消耗行（分账号展示，随平台面板内嵌） */
+export interface TokenAccountRow {
+  id: string;
+  pool: GatewayPoolKey;
+  uid: string;
+  /** 账号名；取不到时回落 uid / 固定标签 */
+  name: string;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+}
+
+/** 单平台池的今日 Token 小计 + 逐账号明细（平台卡片内嵌数据） */
+export interface TokenPoolSummary {
+  /** 该池数据源缺失/无当日条目时为 null（不与 0 混淆） */
+  prompt: number | null;
+  completion: number | null;
+  total: number | null;
+  rows: TokenAccountRow[];
+}
+
+/** API 网关今日 Token 消耗汇总（数据源：三平台池按日落盘用量，非官网积分口径） */
+export interface TokenSummary {
+  /** 任一平台池数据源缺失且无有效数据时为 null（不与 0 混淆） */
+  prompt: number | null;
+  completion: number | null;
+  total: number | null;
+  /** 有 token 消耗的账号数 */
+  accounts: number;
+  rows: TokenAccountRow[];
+  /** 三平台池小计（平台卡片取用；与总量同口径） */
+  byPlatform: Record<PlatformKey, TokenPoolSummary>;
+}
 
 export interface PlatformAlert {
   id: string;
@@ -80,6 +118,8 @@ export interface OverviewData {
   qoderSnapshots: QoderCreditsSnapshot[];
   /** Qoder 官网会话今日消耗（优先） */
   qoderWebUsage: QoderWebUsageToday | null;
+  /** API 网关五桶今日用量（Token 消耗统计来源；缺省 = 未接入/加载失败） */
+  gwUsage?: Partial<Record<GatewayPoolKey, UsageDayView[] | null>>;
   nowMs?: number;
 }
 
@@ -358,6 +398,89 @@ export function summarizeQoder(
   );
 }
 
+/** 网关特殊 uid 的展示名（非真实账号：自定义池固定 uid / 无健康账号 / 工具代执行） */
+const GW_SENTINEL_NAMES: Record<string, string> = {
+  custom: '自定义模型',
+  none: '未归属账号',
+  'wb-toolexec': '工具代执行',
+};
+
+/** 桶内当日单日统计（后端按日历窗口返回；无当日条目返回 null，不用其它日期冒充） */
+function todayUsage(days: UsageDayView[] | null | undefined, today: string): UsageDayView | null {
+  return days?.find((d) => d.date.slice(0, 10) === today) ?? null;
+}
+
+/** 总览 Token 只取三平台池（自定义 / BuddyAI 为独立桶，见 API 管理页用量统计） */
+const OVERVIEW_TOKEN_POOLS: PlatformKey[] = ['trae', 'buddy', 'qoder'];
+
+function emptyPool(): TokenPoolSummary {
+  return { prompt: null, completion: null, total: null, rows: [] };
+}
+
+/**
+ * API 网关今日 Token 消耗（三平台池合计 + 分账号明细，按池归到平台卡片）。
+ * 合计取单日统计的 prompt/completion（权威口径）；明细取 account_tokens（按账号分账）。
+ * 账号名从各平台账号池解析，解析不到回落 uid / 固定标签。
+ */
+export function summarizeGatewayTokens(data: OverviewData, nowMs = Date.now()): TokenSummary {
+  const today = localDate(nowMs);
+  const names = new Map<string, string>();
+  for (const a of data.traeAccounts) names.set(`trae:${a.user_id}`, a.name);
+  for (const a of data.wbAccounts) names.set(`buddy:${a.id}`, a.nickname);
+  for (const a of data.qoderAccounts) names.set(`qoder:${a.id}`, a.nickname);
+
+  const byPlatform: Record<PlatformKey, TokenPoolSummary> = {
+    trae: emptyPool(),
+    buddy: emptyPool(),
+    qoder: emptyPool(),
+  };
+  const rows: TokenAccountRow[] = [];
+  let prompt = 0;
+  let completion = 0;
+  let hasData = false;
+
+  for (const key of OVERVIEW_TOKEN_POOLS) {
+    const day = todayUsage(data.gwUsage?.[key], today);
+    if (!day) continue;
+    hasData = true;
+    prompt += day.prompt_tokens;
+    completion += day.completion_tokens;
+    const pool = byPlatform[key];
+    pool.prompt = day.prompt_tokens;
+    pool.completion = day.completion_tokens;
+    pool.total = day.prompt_tokens + day.completion_tokens;
+    for (const t of day.account_tokens ?? []) {
+      const total = t.prompt_tokens + t.completion_tokens;
+      if (total <= 0) continue;
+      const row: TokenAccountRow = {
+        id: `${key}-${t.name}`,
+        pool: key,
+        uid: t.name,
+        name: names.get(`${key}:${t.name}`) || GW_SENTINEL_NAMES[t.name] || t.name,
+        prompt_tokens: t.prompt_tokens,
+        completion_tokens: t.completion_tokens,
+        total_tokens: total,
+      };
+      pool.rows.push(row);
+      rows.push(row);
+    }
+  }
+
+  const byTotalDesc = (a: TokenAccountRow, b: TokenAccountRow) =>
+    b.total_tokens - a.total_tokens || a.name.localeCompare(b.name);
+  rows.sort(byTotalDesc);
+  for (const key of OVERVIEW_TOKEN_POOLS) byPlatform[key].rows.sort(byTotalDesc);
+
+  return {
+    prompt: hasData ? prompt : null,
+    completion: hasData ? completion : null,
+    total: hasData ? prompt + completion : null,
+    accounts: rows.length,
+    rows,
+    byPlatform,
+  };
+}
+
 /** 三平台汇总（今日已用：Trae/Buddy 官网，Qoder 官网会话优先、本地快照回退） */
 export function aggregateKpis(summaries: PlatformSummary[]): OverviewKpis {
   return {
@@ -370,7 +493,11 @@ export function aggregateKpis(summaries: PlatformSummary[]): OverviewKpis {
 }
 
 /** 一次聚合全部平台（页面只用这一个入口，便于测试） */
-export function buildOverview(data: OverviewData): { platforms: PlatformSummary[]; kpis: OverviewKpis } {
+export function buildOverview(data: OverviewData): {
+  platforms: PlatformSummary[];
+  kpis: OverviewKpis;
+  tokens: TokenSummary;
+} {
   const now = data.nowMs ?? Date.now();
   const platforms = [
     summarizeTrae(data.traeAccounts, data.traeUsage, now),
@@ -384,5 +511,5 @@ export function buildOverview(data: OverviewData): { platforms: PlatformSummary[
       now,
     ),
   ];
-  return { platforms, kpis: aggregateKpis(platforms) };
+  return { platforms, kpis: aggregateKpis(platforms), tokens: summarizeGatewayTokens(data, now) };
 }

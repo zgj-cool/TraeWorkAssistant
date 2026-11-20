@@ -355,7 +355,8 @@ function armCheckinWatchdog() {
 
 export const useAppStore = create<AppState>((set, get) => ({
   ready: false,
-  view: 'dashboard',
+  // 首屏默认进入全平台总览（平台无关视图），应用 Tab 仍保留上次平台上下文
+  view: 'overview',
   activeApp: 'trae',
   env: null,
   certInstalled: false,

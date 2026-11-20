@@ -51,7 +51,7 @@ ai-work-assistant/
 │   ├── lib/                      # tauri.ts(invoke 封装+事件订阅) / themes.ts(主题) / delay.ts(withMinDelay) / cn.ts / about.ts / useIsDark.ts
 │   ├── components/               # TitleBar/Sidebar/TopBar/Toaster/PageHeader/SetupGuide/ui + SystemDialog(系统设置+系统日志弹框)/GeneralSettingsPanel/AboutDialog
 │   └── pages/                    # Overview(全平台总览) / Dashboard / Accounts(661行编排 + accounts/ 16 个拆分子组件) / Checkin / Logs / ApiService / Settings
-│   │                             #   overview/ 总览聚合纯函数 overviewModel + 卡片组件 OverviewCards（仅 Trae/Buddy/Qoder 三积分平台；今日已用三平台官网优先、失败回退本地快照；告警仅凭证、积分到期按平台单列明细）
+│   │                             #   overview/ 总览聚合纯函数 overviewModel + 卡片组件 OverviewCards（仅 Trae/Buddy/Qoder 三积分平台；平台头用官方 logo 图片 src/assets/logos；顶部 6 卡：账号/可用积分/今日已用积分/今日 Token（API 网关三平台池）/7 天到期/账号告警；每张平台卡片内嵌逐账号明细：今日 Token（account_tokens）与 7 日内到期两栏**常驻**（无数据渲染空态），凭证告警按需渲染）
 │   │                             #   dashboard/ 积分看板（platform 参数化：credits 视图=Trae 页、buddy-credits 视图=Buddy 页、qoder-credits 视图=Qoder 页替换旧 QoderCredits；KpiRow/CreditsTab/TokensTab/ExpiryTab/adapters）
 │   │                             #   buddy/（BuddyOverview/BuddyAccounts/BuddyCheckin/BuddyApiService/BuddySettings）
 ├── scripts/                      # dev-tauri.mjs(tauri 脚本入口) / sync_version.mjs / rename_release.mjs / package_portable.mjs / gen_asset_base64.mjs
@@ -158,7 +158,7 @@ ai-work-assistant/
 | API | `api_debug_toggle` / `api_debug_status` | API 请求日志开关 |
 | API | `api_models_list()` / `api_models_sync()` | 模型列表读取（data/api_models.json）/ 官网同步（不消耗积分，最多试 3 账号） |
 | API | `api_logs_list(...)` / `api_logs_detail(...)` / `api_logs_search(...)` | API 请求日志查询 / 详情 / 搜索 |
-| API | `api_usage_stats(days?)` → `UsageDayView[]` | 网关用量按日统计（T1，data/api_usage.json，保留 90 天，直读落盘） |
+| API | `api_usage_stats(days?)` → `UsageDayView[]` | 网关用量按日统计（T1，api_usage 表，保留 90 天，直读落盘）。`UsageDayView` 含 `key_tokens` 与 **`account_tokens`**（按上游账号 token 用量，按合计降序；总览页各平台卡片「今日 Token」逐账号行数据源；旧行缺该字段时为空数组） |
 | API | `api_keys_list()` / `api_keys_save(keys)` | 多 API Key 列表管理（T2，data/api_keys.json，每日配额；主 Key 双轨已移除） |
 | API | `api_unified_models(available_only?)` | 统一模型目录（v3.3.x）：Trae 官网同步 + WB 目录 + 自定义模型三源合并（canonical_id trim+lowercase 归并），元数据四层兜底（L1 人工覆盖 trae_model_meta.json → L2 官网 → L3 默认 → L4 系列推断）；与 `GET /v1/models` 共用视图 |
 | API | `trae_long_context_list()` / `trae_long_context_set(model,enabled)` / `qoder_context_length_list()` / `qoder_context_length_set(model,tokens)` | 按模型长上下文（issue #163，**按池分表、互不影响**，各自只在本池页面设置，只影响请求侧，不改 `/v1/models` 与计费；保存即对下一请求生效）：Trae kv `trae_long_context`（canonical_id 集合；开启 = 注入 `is_max_mode`，与 `-max` 后缀为或关系、不关闭显式 -max，Max Mode 支持表外模型拒绝开启；关闭 = 跟随上游）、Qoder kv `qoder_context_length`（`{canonical_id: tokens}`，区间 1024~10M，tokens null/0 = 清除跟随上游；设置 → `parameters.context_length`，上游 400 时错误信息附恢复指引）；Buddy 无请求侧字段不提供设置 |
@@ -359,7 +359,8 @@ ai-work-assistant/
 - **store 单例**：`useAppStore` 聚合所有状态；`init()` 在 `App.tsx` `useEffect` 启动一次。
 - **主题系统**：Tailwind 3 + `darkMode:'class'`；`lib/themes.ts` 定义 6 套主题（石墨灰浅色 / 炭黑 / 暗夜紫 / 墨绿 / 琥珀暖夜 / 科技蓝，默认 charcoal），通过 `data-theme` 属性驱动，与 `index.css` 中的覆盖块一一对应——新增主题必须两处同步。左下角系统图标弹框（SystemDialog）= Tab1 系统设置（GeneralSettingsPanel：外观/语言/通知/代理）+ Tab2 系统日志（复用 Logs 页）。
 - **snake_case**：前端类型定义（`types.ts`）的字段名与 Rust DTO 完全一致。
-- **路由**：极简 `useState`，不引 react-router。
+- **路由**：极简 `useState`，不引 react-router；`store.view` 初始值为 `overview`（启动首屏 = 全平台总览），点应用 Tab 才进入各平台首页。
+- **应用图标官方化**：侧边栏应用 Tab 与总览平台卡片统一走 `lib/appLogos.ts`（`src/assets/logos/`：Trae=trae.ai favicon.png / Buddy 与 BuddyAI=workbuddy.ai logo.svg / Qoder=qoder.com favIcon.svg / 豆包=doubao.com 192x192）；`settings.app_icons` 仅存用户自选 lucide 图标名，空/非法回退官方 logo。
 - **Modal**：不支持 `window.confirm()`，使用自定义 `Modal` 组件（支持 `size="lg"|"xl"`）。
 - **按钮反馈**：所有异步按钮动作使用 `withMinDelay(promise, 1000)` 确保最少 1 秒 loading。
 

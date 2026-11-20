@@ -51,8 +51,6 @@ import {
   Globe,
   type LucideIcon,
 } from 'lucide-react';
-import type { AppKey } from '../types';
-
 /**
  * 侧边栏应用图标候选表（仅 UI 偏好：settings.app_icons 存图标名，非法/缺失回退默认）。
  * 与 lib/themes.ts 同风格独立成模块，避免 store ↔ Sidebar 循环依赖
@@ -117,7 +115,7 @@ export const ICON_CHOICES: { name: string; icon: LucideIcon }[] = [
 const ICON_MAP: Map<string, LucideIcon> = new Map(ICON_CHOICES.map((c) => [c.name, c.icon]));
 
 /**
- * 解析设置里的图标名：合法返回组件，空/非法返回 null（调用方回退 APP_TABS 默认图标）。
+ * 解析设置里的图标名：合法返回组件，空/非法返回 null（调用方回退应用官方 logo）。
  * 后端 state.rs 与前端 store 已做脏值清洗，此处为渲染层最终兜底。
  */
 export function resolveAppIcon(name: string | null | undefined): LucideIcon | null {
@@ -125,11 +123,3 @@ export function resolveAppIcon(name: string | null | undefined): LucideIcon | nu
   return ICON_MAP.get(name) ?? null;
 }
 
-/** 各应用内置默认图标名（与 APP_TABS 一致，设置页「恢复默认」用） */
-export const DEFAULT_APP_ICONS: Record<AppKey, string> = {
-  trae: 'Sparkles',
-  buddy: 'Bot',
-  qoder: 'Boxes',
-  doubao: 'LayoutGrid',
-  'buddy-ai': 'Globe',
-};

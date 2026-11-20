@@ -22,6 +22,7 @@ import { useAppStore } from '../store';
 import { cn } from '../lib/cn';
 import { nextTheme } from '../lib/themes';
 import { resolveAppIcon } from '../lib/appIcons';
+import { APP_LOGOS } from '../lib/appLogos';
 import { getPinnedApp, isAppVisible, getOrderedApps } from '../lib/appVisibility';
 import type { AppKey, ViewKey } from '../types';
 import AboutDialog from './AboutDialog';
@@ -206,8 +207,8 @@ export default function Sidebar({
           )}
         >
           {visibleTabs.map((tab) => {
-            // 自定义图标优先（系统设置「应用图标」），非法/缺失回退 APP_TABS 内置图标
-            const TabIcon = resolveAppIcon(settings?.app_icons?.[tab.key]) ?? tab.icon;
+            // 自定义图标优先（系统设置「应用图标」），非法/缺失回退官方 logo
+            const CustomIcon = resolveAppIcon(settings?.app_icons?.[tab.key]);
             const active = activeApp === tab.key;
             return (
               <button
@@ -223,7 +224,16 @@ export default function Sidebar({
                     : 'text-slate-500 hover:text-slate-700 dark:text-zinc-500 dark:hover:text-zinc-300',
                 )}
               >
-                <TabIcon size={15} />
+                {CustomIcon ? (
+                  <CustomIcon size={15} />
+                ) : (
+                  <img
+                    src={APP_LOGOS[tab.key]}
+                    alt={`${tab.label} logo`}
+                    className="h-4 w-4 rounded-[3px] object-contain"
+                    draggable={false}
+                  />
+                )}
                 {tab.label}
               </button>
             );

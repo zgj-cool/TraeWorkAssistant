@@ -996,6 +996,8 @@ export interface UsageDayView {
   accounts: UsageCounterView[];
   keys: UsageCounterView[];
   key_tokens: UsageKeyTokenView[];
+  /** 按上游账号的 token 用量（与 accounts 对应，按合计 token 降序） */
+  account_tokens: UsageKeyTokenView[];
   /** 按模型的延迟分位（F-76①，按请求数降序） */
   model_latency?: UsageModelLatencyView[];
 }

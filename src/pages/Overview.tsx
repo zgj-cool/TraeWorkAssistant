@@ -1,21 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { CalendarClock, Clock3, RefreshCw } from 'lucide-react';
+import { RefreshCw } from 'lucide-react';
 import PageHeader from '../components/PageHeader';
 import { Badge, Spinner, StatCard } from '../components/ui';
 import { api } from '../lib/tauri';
-import { fmtCredits } from '../lib/format';
+import { fmtCredits, fmtTokens } from '../lib/format';
 import { withMinDelay } from '../lib/delay';
 import { useAppStore } from '../store';
 import type {
-  AppKey,
   QoderCreditsResult,
+  UsageDayView,
   UsageHistoryResult,
   ViewKey,
   WbCreditsResult,
   WbUsageOfficialAll,
 } from '../types';
 import { buildOverview, type OverviewData } from './overview/overviewModel';
-import { AlertRow, PlatformCard, PLATFORMS } from './overview/OverviewCards';
+import { PlatformCard, PLATFORMS } from './overview/OverviewCards';
 
 type Data = Omit<OverviewData, 'nowMs'>;
 
@@ -45,6 +45,7 @@ export default function Overview() {
         traeUsage,
         wbAccounts, wbCredits, wbCheckin, wbOfficial, wbUsage,
         qoderAccounts, qoderCredits, qoderWebUsage, qoderCheckin, qoderHistory,
+        gwTrae, gwBuddy, gwBuddyAi, gwCustom, gwQoder,
       ] = await Promise.all([
         take(api.accounts.usageHistory(freshOfficial), null as UsageHistoryResult | null, 'Trae 官网消耗明细'),
         take(api.workbuddy.accountsList(), [], 'Buddy 账号'),
@@ -57,6 +58,11 @@ export default function Overview() {
         take(api.qoder.webUsageToday(), null, 'Qoder 官网消耗明细'),
         take(api.qoder.checkinResults(1), [], 'Qoder 签到记录'),
         take(api.qoder.creditsHistoryList(), { snapshots: [] }, 'Qoder 积分快照'),
+        take(api.apiServer.usageStats(1), null as UsageDayView[] | null, '网关 Trae 用量'),
+        take(api.apiServer.wbUsageStats(1), null as UsageDayView[] | null, '网关 Buddy 用量'),
+        take(api.apiServer.buddyAiUsageStats(1), null as UsageDayView[] | null, '网关 BuddyAI 用量'),
+        take(api.apiServer.customUsageStats(1), null as UsageDayView[] | null, '网关自定义用量'),
+        take(api.apiServer.qoderUsageStats(1), null as UsageDayView[] | null, '网关 Qoder 用量'),
       ]);
       setData({
         traeAccounts: useAppStore.getState().accounts,
@@ -71,6 +77,13 @@ export default function Overview() {
         qoderWebUsage,
         qoderCheckin,
         qoderSnapshots: qoderHistory.snapshots,
+        gwUsage: {
+          trae: gwTrae,
+          buddy: gwBuddy,
+          'buddy-ai': gwBuddyAi,
+          custom: gwCustom,
+          qoder: gwQoder,
+        },
       });
       setFailed(errors);
       setUpdatedAt(Date.now());
@@ -97,12 +110,6 @@ export default function Overview() {
 
   const view = useMemo(() => (data ? buildOverview({ ...data, nowMs: Date.now() }) : null), [data]);
   const kpis = view?.kpis;
-  const allAlerts = useMemo(() => view?.platforms.flatMap((p) => p.alerts) ?? [], [view]);
-  const expiringGroups = useMemo(
-    () => (view?.platforms ?? []).filter((p) => p.expiringDetails.length > 0),
-    [view],
-  );
-  const expiringAccounts = expiringGroups.reduce((n, p) => n + p.expiringDetails.length, 0);
 
   const refresh = () => {
     void withMinDelay(load(true, true), 600).then((errors) =>
@@ -110,14 +117,14 @@ export default function Overview() {
     );
   };
 
-  const go = (app: AppKey, target: ViewKey) => openPlatformView(app, target);
-  const goPlatform = (key: keyof typeof PLATFORMS, target: ViewKey) => go(PLATFORMS[key].app, target);
+  const goPlatform = (key: keyof typeof PLATFORMS, target: ViewKey) =>
+    openPlatformView(PLATFORMS[key].app, target);
 
   return (
     <div className="animate-fade-in">
       <PageHeader
         title="全平台总览"
-        desc="Trae · Buddy · Qoder 账号与积分一屏掌握 · 点击指标直达对应明细"
+        desc="Trae · Buddy · Qoder 账号与积分一屏掌握 · 网关 Token 消耗分账号可见 · 点击指标直达对应明细"
         actions={
           <div className="flex items-center gap-2">
             {updatedAt && <span className="text-xs text-slate-400">更新于 {new Date(updatedAt).toLocaleTimeString('zh-CN', { hour12: false })}</span>}
@@ -131,10 +138,25 @@ export default function Overview() {
         }
       />
 
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
         <StatCard label="账号总数" value={kpis?.accounts ?? '—'} hint="三平台账号池合计" tone="brand" />
         <StatCard label="可用总积分" value={kpis?.available != null ? fmtCredits(kpis.available) : '—'} hint="Trae + Buddy + Qoder 账号余额合计" tone="amber" />
-        <StatCard label="今日已用积分" value={kpis?.usedToday != null ? fmtCredits(kpis.usedToday) : '—'} hint="Trae / Buddy / Qoder 官网口径，失败回退快照" tone="cyan" />
+        <StatCard
+          label="今日已用积分"
+          value={kpis?.usedToday != null ? fmtCredits(kpis.usedToday) : '—'}
+          hint="官网口径，失败回退快照"
+          tone="cyan"
+        />
+        <StatCard
+          label="今日 Token 消耗"
+          value={view?.tokens.total != null ? fmtTokens(view.tokens.total) : '—'}
+          hint={
+            view?.tokens.prompt != null
+              ? `输入 ${fmtTokens(view.tokens.prompt)} / 输出 ${fmtTokens(view.tokens.completion ?? 0)}`
+              : 'API 网关三平台池暂无数据'
+          }
+          tone="violet"
+        />
         <StatCard label="7 天内到期积分" value={kpis?.expiringIn7d != null ? fmtCredits(kpis.expiringIn7d) : '—'} hint="仅统计剩余 > 0 的积分包" tone={(kpis?.expiringIn7d ?? 0) > 0 ? 'amber' : 'slate'} />
         <StatCard
           label="账号告警"
@@ -146,78 +168,19 @@ export default function Overview() {
 
       <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {view
-          ? view.platforms.map((p) => <PlatformCard key={p.key} summary={p} onGo={(target) => goPlatform(p.key, target)} />)
+          ? view.platforms.map((p) => (
+              <PlatformCard
+                key={p.key}
+                summary={p}
+                poolTokens={view.tokens.byPlatform[p.key]}
+                onGo={(target) => goPlatform(p.key, target)}
+              />
+            ))
           : [0, 1, 2].map((i) => <div key={i} className="card h-80 animate-pulse bg-slate-200/40 dark:bg-zinc-900" />)}
       </div>
 
-      <div className="mt-5 card overflow-hidden">
-        <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3 dark:border-zinc-800">
-          <div className="flex items-center gap-2">
-            <Clock3 size={16} className="text-amber-500" />
-            <h3 className="font-medium">凭证告警清单</h3>
-            <Badge tone={allAlerts.length ? 'red' : 'green'}>{allAlerts.length} 项</Badge>
-          </div>
-          <span className="text-xs text-slate-400">仅凭证临期 / 需重登，点击行直达账号页</span>
-        </div>
-        {allAlerts.length === 0 ? (
-          <div className="flex h-24 items-center justify-center text-sm text-slate-400">暂无凭证告警，各平台登录状态正常。</div>
-        ) : (
-          <div className="max-h-72 divide-y divide-slate-50 overflow-auto p-1 dark:divide-zinc-900">
-            {allAlerts.map((a) => <AlertRow key={a.id} alert={a} onGo={go} />)}
-          </div>
-        )}
-      </div>
-
-      <div className="mt-5 card overflow-hidden">
-        <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3 dark:border-zinc-800">
-          <div className="flex items-center gap-2">
-            <CalendarClock size={16} className="text-amber-500" />
-            <h3 className="font-medium">积分到期明细</h3>
-            <Badge tone={expiringAccounts ? 'amber' : 'green'}>{expiringAccounts} 个账号</Badge>
-          </div>
-          <span className="text-xs text-slate-400">按平台汇总 7 日内到期积分 · 点击行查看包明细</span>
-        </div>
-        {expiringGroups.length === 0 ? (
-          <div className="flex h-24 items-center justify-center text-sm text-slate-400">7 日内没有即将到期的积分。</div>
-        ) : (
-          <div className="divide-y divide-slate-100 dark:divide-zinc-800">
-            {expiringGroups.map((p) => (
-              <div key={p.key}>
-                <div className="flex items-center justify-between gap-3 bg-slate-50/80 px-4 py-2 dark:bg-zinc-900/60">
-                  <span className="flex items-center gap-2 text-sm font-semibold">
-                    <span className="h-2 w-2 rounded-full bg-amber-500" />
-                    {PLATFORMS[p.key].label}
-                    <span className="text-xs font-normal text-slate-400">{p.expiringDetails.length} 个账号</span>
-                  </span>
-                  <span className="text-base font-bold tabular-nums text-amber-600 dark:text-amber-400">
-                    7 日内到期 {p.expiringIn7d == null ? '—' : fmtCredits(p.expiringIn7d)} 积分
-                  </span>
-                </div>
-                <div className="divide-y divide-slate-50 dark:divide-zinc-900">
-                  {p.expiringDetails.map((d) => (
-                    <button
-                      key={d.id}
-                      onClick={() => go(PLATFORMS[p.key].app, d.view)}
-                      className="flex w-full items-center justify-between gap-3 px-4 py-2 text-left transition hover:bg-slate-50 dark:hover:bg-zinc-800/70"
-                    >
-                      <span className="min-w-0 truncate text-sm text-slate-700 dark:text-zinc-200">
-                        {d.name || d.user_id}
-                        <span className="ml-2 text-xs text-slate-400">{d.reason}</span>
-                      </span>
-                      <span className="shrink-0 text-sm font-semibold tabular-nums text-amber-600 dark:text-amber-400">
-                        {d.credits == null ? '金额未刷新' : `${fmtCredits(d.credits)} 积分`}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
       <p className="mt-4 text-xs leading-relaxed text-slate-400">
-        统计口径：Trae 今日已用取官网消耗明细（usage_history_fetch，缓存命中时标注）；Buddy 取官网用量聚合（workbuddy_usage_official_all），官网不可用时回退本地快照；Qoder 自动读取客户端登录会话后拉取官网消耗明细（按 begin_at 聚合名义消耗），会话不可用回退本地积分快照差分。刷新仅重载缓存/本地数据，强制上游积分刷新请进入对应平台积分看板。
+        统计口径：Trae 今日已用取官网消耗明细（usage_history_fetch，缓存命中时标注）；Buddy 取官网用量聚合（workbuddy_usage_official_all），官网不可用时回退本地快照；Qoder 自动读取客户端登录会话后拉取官网消耗明细（按 begin_at 聚合名义消耗），会话不可用回退本地积分快照差分。Token 消耗取 API 网关按落日用量（Trae / Buddy / Qoder 三池，按账号归入对应平台卡片，与官网积分口径独立；BuddyAI / 自定义池见 API 管理页用量统计）。刷新仅重载缓存/本地数据，强制上游积分刷新请进入对应平台积分看板。
       </p>
     </div>
   );

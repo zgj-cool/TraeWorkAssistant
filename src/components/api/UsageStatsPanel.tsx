@@ -118,6 +118,7 @@ function mergeDay(a: UsageDayView, b: UsageDayView): UsageDayView {
     accounts: mergeCounters(a.accounts, b.accounts),
     keys: mergeCounters(a.keys, b.keys),
     key_tokens: mergeKeyTokens(a.key_tokens, b.key_tokens),
+    account_tokens: mergeKeyTokens(a.account_tokens ?? [], b.account_tokens ?? []),
     model_latency: mergeModelLatency(a.model_latency, b.model_latency),
   };
 }

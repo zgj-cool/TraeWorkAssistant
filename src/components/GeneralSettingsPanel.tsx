@@ -5,7 +5,8 @@ import { withMinDelay } from '../lib/delay';
 import { api } from '../lib/tauri';
 import { THEMES } from '../lib/themes';
 import { APP_TABS } from './Sidebar';
-import { ICON_CHOICES, resolveAppIcon, DEFAULT_APP_ICONS } from '../lib/appIcons';
+import { ICON_CHOICES, resolveAppIcon } from '../lib/appIcons';
+import { APP_LOGOS } from '../lib/appLogos';
 import { getOrderedApps } from '../lib/appVisibility';
 import { cn } from '../lib/cn';
 import type { AppKey, Settings as SettingsType } from '../types';
@@ -182,12 +183,12 @@ export default function GeneralSettingsPanel() {
     reorderApps(order[i], order[j]);
   };
 
-  // 设置应用图标：null 或与内置默认同名 = 删除自定义项（回退 APP_TABS 默认图标）
+  // 设置应用图标：null = 删除自定义项（回退官方 logo）
   const setAppIcon = (key: AppKey, icon: string | null) => {
     setForm((prev) => {
       if (!prev) return prev;
       const appIcons = { ...prev.app_icons };
-      if (!icon || icon === DEFAULT_APP_ICONS[key]) delete appIcons[key];
+      if (!icon) delete appIcons[key];
       else appIcons[key] = icon;
       return { ...prev, app_icons: appIcons };
     });
@@ -285,7 +286,7 @@ export default function GeneralSettingsPanel() {
               // buddy-ai 可见性走独立 opt-in 开关（默认 false = 不展示），不进 hidden_apps
               const visible = isBuddyAi ? form.buddy_ai_visible === true : pinned || !form.hidden_apps.includes(tab.key);
               const customizedName = form.app_icons[tab.key];
-              const Current = resolveAppIcon(customizedName) ?? tab.icon;
+              const CurrentIcon = resolveAppIcon(customizedName);
               const dragging = dragKey === tab.key;
               return (
                 <div
@@ -322,7 +323,16 @@ export default function GeneralSettingsPanel() {
                     onClick={() => setIconPickerFor(tab.key)}
                     className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-slate-200 text-slate-600 transition hover:border-zinc-400 hover:text-zinc-800 active:scale-95 dark:border-zinc-700 dark:text-zinc-300 dark:hover:border-zinc-500 dark:hover:text-zinc-100"
                   >
-                    <Current size={15} />
+                    {CurrentIcon ? (
+                      <CurrentIcon size={15} />
+                    ) : (
+                      <img
+                        src={APP_LOGOS[tab.key]}
+                        alt={`${tab.label} logo`}
+                        className="h-4 w-4 rounded-[3px] object-contain"
+                        draggable={false}
+                      />
+                    )}
                   </button>
                   <label className="flex items-center gap-2">
                     <input
@@ -349,7 +359,7 @@ export default function GeneralSettingsPanel() {
         ? (() => {
             const tab = APP_TABS.find((t) => t.key === iconPickerFor)!;
             const customizedName = form.app_icons[tab.key];
-            const selectedName = customizedName ?? DEFAULT_APP_ICONS[tab.key];
+            const selectedName = customizedName;
             return (
               <div
                 className="fixed inset-0 z-[60] flex items-center justify-center p-4"
@@ -366,7 +376,7 @@ export default function GeneralSettingsPanel() {
                     更换「{tab.label}」图标
                   </h3>
                   <p className="mb-3 text-xs text-slate-400">
-                    选择侧边栏显示图标，点底部「保存设置」生效；非法/缺失自动回退内置默认（{DEFAULT_APP_ICONS[tab.key]}）。
+                    选择侧边栏显示图标，点底部「保存设置」生效；未设置时显示该应用官方 logo。
                   </p>
                   <div className="grid grid-cols-8 gap-1">
                     {ICON_CHOICES.map((c) => {

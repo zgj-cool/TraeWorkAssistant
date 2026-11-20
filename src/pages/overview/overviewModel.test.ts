@@ -3,6 +3,7 @@ import {
   aggregateKpis,
   buildOverview,
   summarizeBuddy,
+  summarizeGatewayTokens,
   summarizeQoder,
   summarizeTrae,
   type OverviewData,
@@ -11,6 +12,7 @@ import type {
   AccountView,
   QoderAccountView,
   QoderCreditsResult,
+  UsageDayView,
   UsageHistoryResult,
   WbCreditsResult,
   WbUsageFallback,
@@ -241,5 +243,65 @@ describe('summarizeQoder 与汇总', () => {
     expect(empty.available).toBeNull();
     expect(empty.usedToday).toBeNull();
     expect(empty.expiringIn7d).toBeNull();
+  });
+});
+
+describe('summarizeGatewayTokens', () => {
+  const day = (prompt: number, completion: number, accounts: { name: string; p: number; c: number }[]) =>
+    ({
+      date: '2026-11-19',
+      prompt_tokens: prompt,
+      completion_tokens: completion,
+      account_tokens: accounts.map((a) => ({
+        name: a.name,
+        prompt_tokens: a.p,
+        completion_tokens: a.c,
+      })),
+    }) as UsageDayView;
+
+  it('只统计三平台池：合计取单日统计，明细按账号解析名称并按合计降序、按池归组', () => {
+    const data = emptyData();
+    data.traeAccounts = [{ user_id: 't1', name: 'Trae甲' }] as AccountView[];
+    data.wbAccounts = [{ id: 'b1', nickname: 'Buddy甲' }] as WorkBuddyAccountView[];
+    data.gwUsage = {
+      trae: [day(100, 50, [{ name: 't1', p: 100, c: 50 }])],
+      buddy: [day(900, 10, [{ name: 'b1', p: 900, c: 10 }])],
+      // 自定义 / BuddyAI 不属于三平台面板，不计入总览
+      custom: [day(7, 3, [{ name: 'custom', p: 7, c: 3 }])],
+      'buddy-ai': [day(5, 5, [{ name: 'b1', p: 5, c: 5 }])],
+      qoder: null,
+    };
+
+    const t = summarizeGatewayTokens(data, NOW);
+    expect(t.total).toBe(1060);
+    expect(t.prompt).toBe(1000);
+    expect(t.completion).toBe(60);
+    expect(t.accounts).toBe(2);
+    expect(t.rows.map((r) => [r.pool, r.name, r.total_tokens])).toEqual([
+      ['buddy', 'Buddy甲', 910],
+      ['trae', 'Trae甲', 150],
+    ]);
+    expect(t.byPlatform.trae.total).toBe(150);
+    expect(t.byPlatform.buddy.total).toBe(910);
+    expect(t.byPlatform.trae.rows).toHaveLength(1);
+    // 无当日条目的池为 null，不与 0 混淆
+    expect(t.byPlatform.qoder.total).toBeNull();
+    expect(t.byPlatform.qoder.rows).toEqual([]);
+  });
+
+  it('无数据源或无当日条目返回 null，不用其它日期冒充', () => {
+    const data = emptyData();
+    data.gwUsage = {
+      // 桶内有 18 日数据但今日无条目 → 不参与统计
+      trae: [
+        { date: '2026-11-18', prompt_tokens: 9, completion_tokens: 1, account_tokens: [] } as unknown as UsageDayView,
+      ],
+      buddy: [],
+      qoder: null,
+    };
+    const t = summarizeGatewayTokens(data, NOW);
+    expect(t.total).toBeNull();
+    expect(t.rows).toEqual([]);
+    expect(t.byPlatform.trae.total).toBeNull();
   });
 });

@@ -137,6 +137,9 @@ pub struct DayStats {
     /// 按 API Key 统计 token 用量：(prompt, completion)
     #[serde(default)]
     pub key_tokens: HashMap<String, (u64, u64)>,
+    /// 按上游账号统计 token 用量：(prompt, completion)（总览页「Token 消耗 · 分账号」数据源）
+    #[serde(default)]
+    pub account_tokens: HashMap<String, (u64, u64)>,
     /// 天级延迟样本（F-76：P50/P95/最大值 + TTFT）
     #[serde(default)]
     pub latency: LatencyAgg,
@@ -201,6 +204,12 @@ impl DayStats {
             let kt = self.key_tokens.entry(key_id.to_string()).or_insert((0, 0));
             kt.0 = kt.0.saturating_add(prompt_tokens);
             kt.1 = kt.1.saturating_add(completion_tokens);
+        }
+        // 按上游账号的 token 用量记账（总览页「Token 消耗 · 分账号」数据源）
+        {
+            let at = self.account_tokens.entry(uid.to_string()).or_insert((0, 0));
+            at.0 = at.0.saturating_add(prompt_tokens);
+            at.1 = at.1.saturating_add(completion_tokens);
         }
     }
 
@@ -602,6 +611,8 @@ pub struct UsageDayView {
     pub keys: Vec<CounterView>,
     /// 按 Key 的 token 用量（与 keys 对应）
     pub key_tokens: Vec<KeyTokenView>,
+    /// 按上游账号的 token 用量（与 accounts 对应，按合计 token 降序）
+    pub account_tokens: Vec<KeyTokenView>,
     /// 按模型的延迟分位（F-76，按请求数降序）
     pub model_latency: Vec<ModelLatencyView>,
 }
@@ -645,6 +656,20 @@ impl UsageDayView {
                 .cmp(&(a.prompt_tokens + a.completion_tokens))
                 .then(a.name.cmp(&b.name))
         });
+        let mut account_tokens: Vec<KeyTokenView> = d
+            .account_tokens
+            .iter()
+            .map(|(k, (p, c))| KeyTokenView {
+                name: k.clone(),
+                prompt_tokens: *p,
+                completion_tokens: *c,
+            })
+            .collect();
+        account_tokens.sort_by(|a, b| {
+            (b.prompt_tokens + b.completion_tokens)
+                .cmp(&(a.prompt_tokens + a.completion_tokens))
+                .then(a.name.cmp(&b.name))
+        });
         let mut model_latency: Vec<ModelLatencyView> = d
             .model_latency
             .iter()
@@ -681,6 +706,7 @@ impl UsageDayView {
             accounts,
             keys,
             key_tokens,
+            account_tokens,
             model_latency,
         }
     }
@@ -745,9 +771,20 @@ mod tests {
         // 按 Key 的 token 用量记账（m1/u1/master 两请求：10+0 prompt、20+0 completion）
         assert_eq!(d.key_tokens.get("master"), Some(&(10, 20)));
         assert_eq!(d.key_tokens.get("k2"), Some(&(5, 8)));
+        // 按账号的 token 用量记账（u1 两请求 10+0/20+0、u2 一请求 5/8）
+        assert_eq!(d.account_tokens.get("u1"), Some(&(10, 20)));
+        assert_eq!(d.account_tokens.get("u2"), Some(&(5, 8)));
         // 平均耗时 = (100+300+50)/3 = 150
         let view = UsageDayView::from_day(&today, d);
         assert_eq!(view.avg_duration_ms, 150);
+        // 账号 token 视图按合计降序（u1=30 > u2=13）
+        assert_eq!(
+            view.account_tokens
+                .iter()
+                .map(|a| (a.name.as_str(), a.prompt_tokens, a.completion_tokens))
+                .collect::<Vec<_>>(),
+            vec![("u1", 10, 20), ("u2", 5, 8)]
+        );
     }
 
     #[test]
