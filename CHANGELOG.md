@@ -6,6 +6,14 @@
 
 ---
 
+## [3.9.4] · 2026-11-20 · 构建工具链 Node 版本固定
+
+### 构建与工具链
+
+- 项目内固定 Node 20.20.2（`package.json` 的 `volta.node` + `.node-version` + `engines.node`），用 Volta 进入项目目录自动切换，nvm/fnm 按 `.node-version` 对齐；解决 Node 16 下 Vite 5 / Vitest 无法启动的问题。
+
+---
+
 ## [3.9.3] · 2026-11-11 · 网关指纹清洗与账号快照健壮性（三项修复加强）
 
 ### 修复加强

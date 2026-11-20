@@ -181,7 +181,7 @@ flowchart LR
 
 ## 开发
 
-前置：Node.js 18+、Rust 1.85+（`Cargo.toml` rust-version）、WebView2 Runtime、VS Build Tools (C++)
+前置：**Node.js 20**（`package.json` 的 `volta.node` 与 `.node-version` 均固定 `20.20.2`，安装 [Volta](https://volta.sh) 后进入项目目录自动切换；未装 Volta 可用 nvm/fnm 按 `.node-version` 对齐）、Rust 1.85+（`Cargo.toml` rust-version）、WebView2 Runtime、VS Build Tools (C++)
 
 ```powershell
 npm install

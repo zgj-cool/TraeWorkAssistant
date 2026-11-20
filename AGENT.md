@@ -1,4 +1,4 @@
-# AGENT.md — AI Work 助手 (ai-work-assistant) v3.9.3
+# AGENT.md — AI Work 助手 (ai-work-assistant) v3.9.4
 
 > 项目级别速查手册。给后续会话（人或 AI）秒接上下文用。任何会改契约的提交请同步更新本文档。
 > 注：品牌已由 Trae Work Assistant 迁移为 **AI Work 助手（ai-work-assistant）**，本机仓库目录暂为 `trae-work-assistant`，后续可整体重命名。
@@ -10,7 +10,10 @@ Windows 桌面端多账号签到 + 登录态切换 + 设备隔离 + API 网关�
 ## 2. Quick Start
 
 ```powershell
-# 仅 Windows，需要 Node 18+ / Rust stable (MSVC) / VS Build Tools C++ 工作负载 / WebView2（Python 已移除，scripts 全 .mjs 零依赖）
+# 仅 Windows，需要 Node 20（package.json "volta" 字段固定 20.20.2，Volta 进入项目
+# 自动切换；无 Volta 时按 .node-version 用 nvm/fnm 对齐）/ Rust stable (MSVC) /
+# VS Build Tools C++ 工作负载 / WebView2（Python 已移除，scripts 全 .mjs 零依赖）
+# 注意：Node 16 无法运行 Vite 5（vitest 启动即报 crypto.getRandomValues 缺失）
 cd ai-work-assistant   # 本机目录暂为 trae-work-assistant，见文首说明
 npm install
 npm run tauri dev          # 开发模式（Tauri WebView 加载 Vite 5173）
