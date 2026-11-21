@@ -352,7 +352,7 @@ export default function BuddyAiOverview() {
       <div className="card mt-5 overflow-hidden">
         <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3 dark:border-zinc-800">
           <div>
-            <h3 className="font-medium">配置导航</h3>
+            <h3 className="text-[14px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">配置导航</h3>
             <p className="text-xs text-slate-500">按步骤完成初始化，已完成的步骤无需重复处理。</p>
           </div>
           <Badge tone={allDone ? 'green' : 'amber'}>

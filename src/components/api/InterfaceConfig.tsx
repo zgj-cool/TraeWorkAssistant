@@ -277,7 +277,7 @@ export default function InterfaceConfig() {
               value={port}
               onChange={(e) => setPort(parseInt(e.target.value) || 0)}
             />
-            <p className="mt-1 text-xs text-slate-400">改动将在下次启动 API 服务后生效</p>
+            <p className="mt-1.5 text-[11.5px] leading-relaxed text-slate-500 dark:text-zinc-400">改动将在下次启动 API 服务后生效</p>
           </div>
           <div>
             <label className="mb-1 block text-xs font-medium text-slate-500 dark:text-zinc-400">
@@ -290,7 +290,7 @@ export default function InterfaceConfig() {
               onChange={(e) => setHost(e.target.value)}
               placeholder="127.0.0.1"
             />
-            <p className="mt-1 text-xs text-slate-400">
+            <p className="mt-1.5 text-[11.5px] leading-relaxed text-slate-500 dark:text-zinc-400">
               默认仅本机 127.0.0.1 可访问；如需局域网设备访问可设为 0.0.0.0，此时必须启用 API Key
             </p>
           </div>
@@ -310,7 +310,7 @@ export default function InterfaceConfig() {
                 </option>
               ))}
             </select>
-            <p className="mt-1 text-xs text-slate-400">
+            <p className="mt-1.5 text-[11.5px] leading-relaxed text-slate-500 dark:text-zinc-400">
               统一目录（{visiblePoolText || '无可见应用'}聚合）；用于 CC Switch 注册与未指定 model 的请求
             </p>
             {modelsLoaded && gw?.default_model &&

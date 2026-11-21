@@ -234,7 +234,7 @@ export default function Checkin() {
                 <button
                   key={o.k}
                   onClick={() => setScope(o.k)}
-                  className={`chip border ${scope === o.k ? 'border-brand-500 bg-brand-50 text-brand-700 dark:bg-brand-500/15 dark:text-brand-300' : 'border-slate-300 text-slate-500'}`}
+                  className={`chip border ${scope === o.k ? 'border-transparent bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900' : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 dark:border-zinc-700 dark:bg-zinc-900/60 dark:text-zinc-300'}`}
                 >
                   {o.t}
                 </button>
@@ -292,7 +292,7 @@ export default function Checkin() {
                     return (
                       <tr
                         key={a.user_id}
-                        className={`row-hover border-t border-slate-100 dark:border-zinc-800 ${scope === 'selected' && !isCandidate ? 'opacity-40' : ''}`}
+                        className={`row-hover border-t border-slate-200/60 dark:border-zinc-800/60 ${scope === 'selected' && !isCandidate ? 'opacity-40' : ''}`}
                       >
                         {scope === 'selected' && (
                           <td className="px-3 py-1.5">
@@ -364,7 +364,7 @@ export default function Checkin() {
       {checkin.active || checkin.total > 0 || checkin.done?.total === 0 ? (
         <div className="card p-4">
           <div className="mb-3 flex items-center justify-between">
-            <h3 className="font-medium">实时进度</h3>
+            <h3 className="text-[14px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">实时进度</h3>
             <div className="flex items-center gap-3">
               {checkin.active ? (
                 <Badge tone="blue">运行中</Badge>

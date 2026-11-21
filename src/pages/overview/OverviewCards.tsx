@@ -78,19 +78,23 @@ function MetricCell({
   return (
     <button
       onClick={onClick}
-      className="group min-w-0 rounded-lg px-2 py-1.5 text-left transition hover:bg-slate-50 dark:hover:bg-zinc-800/70"
+      className="group min-w-0 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-slate-50/80 dark:hover:bg-zinc-800/60"
       title={`前往${label}详情`}
     >
-      <span className="block text-[11px] text-slate-400">{label}</span>
+      <span className="block text-[11px] font-medium text-slate-500 dark:text-zinc-400">{label}</span>
       <span
         className={cn(
-          'mt-0.5 block truncate text-sm font-semibold tabular-nums',
-          warn ? 'text-rose-500 dark:text-rose-400' : 'text-slate-800 dark:text-zinc-100',
+          'mt-1 block truncate text-[15px] font-semibold leading-none tabular-nums',
+          warn ? 'text-rose-500 dark:text-rose-400' : 'text-slate-900 dark:text-zinc-50',
         )}
       >
         {value}
       </span>
-      {hint && <span className="mt-0.5 block truncate text-[10px] text-slate-400">{hint}</span>}
+      {hint && (
+        <span className="mt-1 block truncate text-[10.5px] text-slate-500 dark:text-zinc-400">
+          {hint}
+        </span>
+      )}
     </button>
   );
 }
@@ -110,13 +114,18 @@ function CardSection({
   children: ReactNode;
 }) {
   return (
-    <div className="border-t border-slate-100 px-3 py-2 dark:border-zinc-800">
-      <div className="mb-1 flex items-center justify-between gap-2">
-        <span className="flex items-center gap-1 text-[11px] font-medium text-slate-500 dark:text-zinc-400">
+    <div className="border-t border-slate-200/60 px-3 py-2.5 dark:border-zinc-800/60">
+      <div className="mb-1.5 flex items-center justify-between gap-2">
+        <span className="flex items-center gap-1.5 text-[11.5px] font-medium text-slate-600 dark:text-zinc-300">
           {icon}
           {title}
         </span>
-        <span className={cn('shrink-0 text-[11px] tabular-nums', metaClass ?? 'text-slate-400')}>
+        <span
+          className={cn(
+            'shrink-0 text-[11px] tabular-nums',
+            metaClass ?? 'text-slate-500 dark:text-zinc-400',
+          )}
+        >
           {meta}
         </span>
       </div>
@@ -144,8 +153,12 @@ function ListRow({
   const content = (
     <>
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-xs text-slate-700 dark:text-zinc-200">{title}</span>
-        {sub && <span className="block truncate text-[10px] text-slate-400">{sub}</span>}
+        <span className="block truncate text-[12.5px] text-slate-700 dark:text-zinc-200">
+          {title}
+        </span>
+        {sub && (
+          <span className="block truncate text-[11px] text-slate-400 dark:text-zinc-500">{sub}</span>
+        )}
       </span>
       {right && (
         <span className={cn('shrink-0 text-xs font-semibold tabular-nums', rightClass)}>{right}</span>
@@ -162,7 +175,7 @@ function ListRow({
   return (
     <button
       onClick={onClick}
-      className="flex w-full items-center justify-between gap-2 rounded-md px-1.5 py-1 text-left transition hover:bg-slate-50 dark:hover:bg-zinc-800/70"
+      className="flex w-full items-center justify-between gap-2 rounded-md px-1.5 py-1 text-left transition-colors hover:bg-slate-50/80 dark:hover:bg-zinc-800/60"
       title={hint}
     >
       {content}
@@ -201,22 +214,22 @@ export function PlatformCard({
         (tokens.rows.length > 0 ? ` · ${tokens.rows.length} 个账号` : '');
 
   return (
-    <section className="card flex flex-col overflow-hidden transition duration-150 hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md dark:hover:border-zinc-700">
+    <section className="card flex flex-col overflow-hidden hover:-translate-y-0.5 hover:border-slate-300/80 hover:shadow-soft-lg dark:hover:border-zinc-700/80">
       <button
         onClick={() => onGo(meta.home)}
-        className="flex items-center justify-between gap-2 border-b border-slate-100 px-4 py-3 text-left dark:border-zinc-800"
+        className="group/head flex items-center justify-between gap-2 border-b border-slate-200/60 px-4 py-3 text-left dark:border-zinc-800/60"
       >
-        <span className="flex items-center gap-2">
+        <span className="flex min-w-0 items-center gap-2">
           <img
             src={meta.logo}
             alt={`${meta.label} logo`}
-            className="h-8 w-8 shrink-0 rounded-lg object-contain"
+            className="h-7 w-7 shrink-0 rounded-md object-contain"
             draggable={false}
           />
-          <span className="text-sm font-semibold">{meta.label}</span>
+          <span className="text-[14px] font-semibold tracking-[-0.01em]">{meta.label}</span>
           <Badge tone={TONE[summary.key]}>{summary.accounts} 个账号</Badge>
         </span>
-        <span className="flex items-center gap-1 text-xs text-slate-400">
+        <span className="flex shrink-0 items-center gap-0.5 text-[12px] text-slate-400 transition-colors group-hover/head:text-slate-600 dark:group-hover/head:text-zinc-300">
           进入 <ChevronRight size={14} />
         </span>
       </button>
@@ -278,7 +291,7 @@ export function PlatformCard({
         }
       >
         {credits.length === 0 ? (
-          <p className="px-1.5 py-1 text-[11px] leading-relaxed text-slate-400">
+          <p className="px-1.5 py-1 text-[11px] leading-relaxed text-slate-500 dark:text-zinc-400">
             本平台暂无账号，导入账号后这里会按账号展示今日积分消耗。
           </p>
         ) : (
@@ -310,7 +323,7 @@ export function PlatformCard({
         metaClass={tokens.total == null ? 'text-slate-400' : 'text-violet-600 dark:text-violet-400'}
       >
         {tokens.rows.length === 0 ? (
-          <p className="px-1.5 py-1 text-[11px] leading-relaxed text-slate-400">
+          <p className="px-1.5 py-1 text-[11px] leading-relaxed text-slate-500 dark:text-zinc-400">
             {tokens.total == null
               ? '今日暂无网关用量。启动 API 服务并产生请求后，这里会按账号展示输入 / 输出 Token。'
               : tokens.total === 0
@@ -353,7 +366,7 @@ export function PlatformCard({
         }
       >
         {summary.expiringDetails.length === 0 ? (
-          <p className="px-1.5 py-1 text-[11px] leading-relaxed text-slate-400">
+          <p className="px-1.5 py-1 text-[11px] leading-relaxed text-slate-500 dark:text-zinc-400">
             7 日内没有即将到期的积分包。
           </p>
         ) : (
@@ -392,7 +405,7 @@ export function PlatformCard({
         </CardSection>
       )}
 
-      <div className="mt-auto flex flex-wrap items-center gap-1 border-t border-slate-100 px-4 py-2 dark:border-zinc-800">
+      <div className="mt-auto flex flex-wrap items-center gap-1 border-t border-slate-200/60 px-3 py-2 dark:border-zinc-800/60">
         {summary.notes.slice(1).map((note) => (
           <Badge key={note} tone="slate">{note}</Badge>
         ))}

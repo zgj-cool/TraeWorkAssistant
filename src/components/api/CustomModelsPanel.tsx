@@ -604,7 +604,7 @@ export default function CustomModelsPanel({
       >
         <div className="text-sm">
           确认删除模型「{deleteFor?.name}」？
-          <div className="mt-1 text-xs text-slate-400">删除后该模型名将回落 Trae/Buddy/Qoder 统一调度管线（如内置目录存在同名模型）。</div>
+          <div className="mt-1.5 text-[11.5px] leading-relaxed text-slate-500 dark:text-zinc-400">删除后该模型名将回落 Trae/Buddy/Qoder 统一调度管线（如内置目录存在同名模型）。</div>
         </div>
       </Modal>
     </div>

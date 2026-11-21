@@ -4,9 +4,215 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>AI Work 助手</title>
+    <!-- 首屏骨架：JS bundle 解析完成前立即有内容与动画，消除 WebView 启动白屏。
+         纯 CSS 实现（符合 script-src 'self' 的 CSP），React 首帧后由 main.tsx 移除。 -->
+    <!-- 首帧前套用「上次使用的主题」：由 Rust 建窗时的 initialization_script 写入
+         data-boot-theme / .dark（不产生网络请求，也不会阻塞样式解析——
+         不要改回外部 <script src> 同步脚本，那会让首帧无样式而闪白）。 -->
+    <style>
+      /* 底色/前景统一走 CSS 变量：默认浅色 → 系统深色媒体查询 → 已保存主题
+         （Rust 建窗时 initialization_script 写 data-boot-theme）逐级覆盖。
+         色值必须与 Rust `splash_background` 保持一致，否则又会出现跳色。 */
+      :root {
+        --bs-page: #f8fafc;
+        --bs-fg: #0f172a;
+        --bs-muted: #64748b;
+        --bs-mark-bg: #18181b;
+        --bs-mark-fg: #ffffff;
+        --bs-track: rgba(203, 213, 225, 0.7);
+        --bs-bar: #3f3f46;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bs-page: #09090b;
+          --bs-fg: #f4f4f5;
+          --bs-muted: #a1a1aa;
+          --bs-mark-bg: #f4f4f5;
+          --bs-mark-fg: #18181b;
+          --bs-track: rgba(63, 63, 70, 0.6);
+          --bs-bar: #d4d4d8;
+        }
+      }
+      :root[data-boot-theme='light'] {
+        --bs-page: #f8fafc;
+        --bs-fg: #0f172a;
+        --bs-muted: #64748b;
+        --bs-mark-bg: #18181b;
+        --bs-mark-fg: #ffffff;
+        --bs-track: rgba(203, 213, 225, 0.7);
+        --bs-bar: #3f3f46;
+      }
+      :root[data-boot-theme='dark'] {
+        --bs-page: #09090b;
+        --bs-fg: #f4f4f5;
+        --bs-muted: #a1a1aa;
+        --bs-mark-bg: #f4f4f5;
+        --bs-mark-fg: #18181b;
+        --bs-track: rgba(63, 63, 70, 0.6);
+        --bs-bar: #d4d4d8;
+      }
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+        background: var(--bs-page);
+      }
+      #boot-splash {
+        position: fixed;
+        inset: 0;
+        z-index: 2147483647;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: var(--bs-page);
+        color: var(--bs-fg);
+        font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'PingFang SC',
+          'Microsoft YaHei', sans-serif;
+        transition: opacity 0.18s ease;
+      }
+      #boot-splash .bs-inner {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+      }
+      /* 注意：骨架的入场动画只在「React 接管后的启动页」里播（SplashScreen.tsx）。
+         这份首屏骨架必须**首帧即完整可见**——它带 opacity:0 的入场动画时，窗口显示的
+         前 110~500ms 只有底色没有内容，深色主题下就表现为「先黑一下再出现启动页」。 */
+      #boot-splash .bs-lockup {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      #boot-splash .bs-mark {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 34px;
+        height: 34px;
+        border-radius: 10px;
+        background: var(--bs-mark-bg);
+        color: var(--bs-mark-fg);
+      }
+      #boot-splash .bs-name {
+        font-size: 15px;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+      }
+      #boot-splash .bs-meta {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 16px;
+        margin-top: 24px;
+      }
+      #boot-splash .bs-status {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 12px;
+        color: var(--bs-muted);
+      }
+      #boot-splash .bs-dots {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+      }
+      #boot-splash .bs-dots i {
+        width: 3px;
+        height: 3px;
+        border-radius: 50%;
+        background: currentColor;
+        opacity: 0.2;
+        animation: bs-breathe 1.2s ease-in-out infinite;
+      }
+      #boot-splash .bs-dots i:nth-child(2) {
+        animation-delay: 0.16s;
+      }
+      #boot-splash .bs-dots i:nth-child(3) {
+        animation-delay: 0.32s;
+      }
+      #boot-splash .bs-bar {
+        position: relative;
+        display: block;
+        width: 188px;
+        height: 2px;
+        overflow: hidden;
+        border-radius: 9999px;
+        background: var(--bs-track);
+      }
+      #boot-splash .bs-bar i {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        left: 0;
+        display: block;
+        width: 42%;
+        border-radius: 9999px;
+        background: var(--bs-bar);
+        animation: bs-sweep 1.5s cubic-bezier(0.45, 0, 0.25, 1) infinite;
+      }
+      @keyframes bs-sweep {
+        0% {
+          transform: translateX(-115%);
+        }
+        100% {
+          transform: translateX(360%);
+        }
+      }
+      @keyframes bs-breathe {
+        0%,
+        100% {
+          opacity: 0.18;
+          transform: translateY(0);
+        }
+        45% {
+          opacity: 0.9;
+          transform: translateY(-1px);
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        #boot-splash .bs-dots i,
+        #boot-splash .bs-bar i {
+          animation: none;
+        }
+      }
+    </style>
   </head>
   <body>
+    <div id="boot-splash" role="status" aria-live="polite" aria-busy="true">
+      <div class="bs-inner">
+        <div class="bs-lockup">
+          <span class="bs-mark">
+            <svg
+              viewBox="0 0 24 24"
+              width="19"
+              height="19"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path d="M12 8V4H8" />
+              <rect width="16" height="12" x="4" y="8" rx="2" />
+              <path d="M2 14h2" />
+              <path d="M20 14h2" />
+              <path d="M15 13v2" />
+              <path d="M9 13v2" />
+            </svg>
+          </span>
+          <span class="bs-name">AI Work 助手</span>
+        </div>
+        <div class="bs-meta">
+          <span class="bs-status"
+            >正在加载本地数据<span class="bs-dots"><i></i><i></i><i></i></span
+          ></span>
+          <span class="bs-bar"><i></i></span>
+        </div>
+      </div>
+    </div>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
+
 </html>

@@ -847,13 +847,13 @@ export default function DoubaoAccounts() {
           <div className="mb-3 flex flex-wrap items-center gap-2 text-sm">
             <button
               onClick={() => setChipFilter('all')}
-              className={`chip border ${chipFilter === 'all' ? 'border-brand-500 text-brand-600' : 'border-slate-300 text-slate-500'}`}
+              className={`chip border ${chipFilter === 'all' ? 'border-transparent bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900' : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 dark:border-zinc-700 dark:bg-zinc-900/60 dark:text-zinc-300'}`}
             >
               全部 ({accounts.length})
             </button>
             <button
               onClick={() => setChipFilter('ungrouped')}
-              className={`chip border ${chipFilter === 'ungrouped' ? 'border-brand-500 text-brand-600' : 'border-slate-300 text-slate-500'}`}
+              className={`chip border ${chipFilter === 'ungrouped' ? 'border-transparent bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900' : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 dark:border-zinc-700 dark:bg-zinc-900/60 dark:text-zinc-300'}`}
             >
               未分组 ({accounts.filter((a) => !a.group_id).length})
             </button>
@@ -861,7 +861,7 @@ export default function DoubaoAccounts() {
               <button
                 key={g.id}
                 onClick={() => setChipFilter(g.id)}
-                className={`chip border ${chipFilter === g.id ? 'text-brand-600 dark:text-brand-400' : 'border-slate-300 text-slate-500'}`}
+                className={`chip border ${chipFilter === g.id ? 'text-brand-600 dark:text-brand-400' : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 dark:border-zinc-700 dark:bg-zinc-900/60 dark:text-zinc-300'}`}
                 style={{ borderColor: chipFilter === g.id ? g.color : undefined }}
               >
                 <span className="inline-block h-2 w-2 rounded-full" style={{ background: g.color }} />
@@ -880,7 +880,7 @@ export default function DoubaoAccounts() {
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
-              <thead className="bg-slate-50 text-xs uppercase text-slate-500 dark:bg-zinc-900">
+              <thead className="border-b border-slate-200/70 bg-slate-50/70 text-[11.5px] font-medium tracking-[0.01em] text-slate-500 dark:border-zinc-800/70 dark:bg-zinc-900/40 dark:text-zinc-400">
                 <tr>
                   <th className="whitespace-nowrap px-3 py-2 text-left">账号</th>
                   <th className="whitespace-nowrap px-3 py-2 text-left">分组</th>
@@ -895,7 +895,7 @@ export default function DoubaoAccounts() {
               </thead>
               <tbody>
                 {filtered.map((a) => (
-                  <tr key={a.user_id} className="row-hover border-t border-slate-200 dark:border-zinc-800">
+                  <tr key={a.user_id} className="row-hover border-t border-slate-200/70 dark:border-zinc-800">
                     <td className="px-3 py-2">
                       <div className="flex items-center gap-2" title={quotaTip(a)}>
                         <span className="font-medium">{a.name}</span>
@@ -1152,7 +1152,7 @@ export default function DoubaoAccounts() {
                   {quotaResult.result.parsed.subscription.is_gift && <Badge tone="amber">活动赠送</Badge>}
                   <Badge tone="green">生效中</Badge>
                 </div>
-                <div className="mt-1 text-xs text-slate-400">
+                <div className="mt-1.5 text-[11.5px] leading-relaxed text-slate-500 dark:text-zinc-400">
                   {quotaResult.result.parsed.subscription.start_at ?? '—'} 起 ·{' '}
                   {quotaResult.result.parsed.subscription.expire_at ?? '—'} 到期
                 </div>
@@ -1276,7 +1276,7 @@ export default function DoubaoAccounts() {
                   → ③ 回到这里点上方按钮填入。
                 </p>
               </div>
-              <p className="mt-1 text-xs text-slate-400">
+              <p className="mt-1.5 text-[11.5px] leading-relaxed text-slate-500 dark:text-zinc-400">
                 凭证等同密码，仅存本地。清空 sessionid 与 sid_guard 后保存即删除该账号凭证（ttwid 仅在非空时更新）。
               </p>
               {credLoadFailed && (

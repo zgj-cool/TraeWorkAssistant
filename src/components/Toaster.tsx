@@ -9,13 +9,19 @@ const iconMap: Record<ToastKind, typeof Info> = {
   error: XCircle,
 };
 
-const toneMap: Record<ToastKind, string> = {
-  info: 'border-sky-300 bg-sky-50 text-sky-800 dark:border-sky-500/40 dark:bg-sky-500/10 dark:text-sky-200',
-  success:
-    'border-emerald-300 bg-emerald-50 text-emerald-800 dark:border-emerald-500/40 dark:bg-emerald-500/10 dark:text-emerald-200',
-  warn: 'border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-200',
-  error:
-    'border-rose-300 bg-rose-50 text-rose-800 dark:border-rose-500/40 dark:bg-rose-500/10 dark:text-rose-200',
+/** 配色只走「描边 + 图标」：文字沿用正文灰阶，长时间阅读错误长文案不刺眼 */
+const borderTone: Record<ToastKind, string> = {
+  info: 'border-sky-200/90 dark:border-sky-500/30',
+  success: 'border-emerald-200/90 dark:border-emerald-500/30',
+  warn: 'border-amber-200/90 dark:border-amber-500/30',
+  error: 'border-rose-200/90 dark:border-rose-500/30',
+};
+
+const iconTone: Record<ToastKind, string> = {
+  info: 'text-sky-600 dark:text-sky-400',
+  success: 'text-emerald-600 dark:text-emerald-400',
+  warn: 'text-amber-600 dark:text-amber-400',
+  error: 'text-rose-600 dark:text-rose-400',
 };
 
 export default function Toaster() {
@@ -34,15 +40,15 @@ export default function Toaster() {
           <div
             key={t.id}
             className={cn(
-              'pointer-events-auto flex items-start gap-2 rounded-lg border px-3 py-2.5 text-sm shadow-lg animate-fade-in',
-              toneMap[t.kind],
+              'pointer-events-auto flex animate-pop-in items-start gap-2.5 rounded-xl border bg-white px-3.5 py-2.5 text-[13px] leading-relaxed text-slate-700 shadow-soft-lg dark:bg-zinc-900 dark:text-zinc-200',
+              borderTone[t.kind],
             )}
           >
-            <Icon size={16} className="mt-0.5 shrink-0" />
+            <Icon size={16} className={cn('mt-0.5 shrink-0', iconTone[t.kind])} />
             <span className="flex-1 break-words">{t.msg}</span>
             <button
               onClick={() => dismiss(t.id)}
-              className="shrink-0 opacity-60 hover:opacity-100"
+              className="shrink-0 text-slate-400 opacity-70 transition-opacity hover:opacity-100 dark:text-zinc-500"
               aria-label="关闭"
             >
               <X size={14} />

@@ -500,13 +500,13 @@ export default function DoubaoSettings() {
 
       <div className="mt-5 grid items-start gap-4 md:grid-cols-2">
         {/* 左列：通用配置（应用位置 + 快照设置 + 接口端点） */}
-        <section className="card p-4">
+        <section className="card p-5">
           <div className="mb-3 flex items-center gap-2">
             <SlidersHorizontal size={16} className="text-emerald-500" />
-            <h2 className="font-medium">通用配置</h2>
+            <h2 className="text-[15px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">通用配置</h2>
           </div>
 
-          <h3 className="mb-1 font-medium">应用位置</h3>
+          <h3 className="mb-1.5 text-[14px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">应用位置</h3>
           <div className="space-y-2 text-xs text-slate-500">
             <p>
               数据目录：<code className="rounded bg-slate-100 px-1 font-mono dark:bg-zinc-800">{locate?.user_data_dir ?? '%LOCALAPPDATA%\\Doubao\\User Data'}</code>
@@ -530,7 +530,7 @@ export default function DoubaoSettings() {
             <p className="text-slate-400">自动检测顺序：手动指定 → 注册表卸载键 → 默认路径 → 运行进程反查。</p>
           </div>
 
-          <h3 className="mb-1 mt-4 font-medium">快照设置</h3>
+          <h3 className="mb-2 mt-5 text-[14px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">快照设置</h3>
           <div className="space-y-3 text-xs text-slate-500">
             <p>
               快照自带<b>版本元数据</b>（schemaVersion + 豆包内核版本），恢复前自动校验完整性（leveldb 结构），
@@ -554,7 +554,7 @@ export default function DoubaoSettings() {
             </label>
           </div>
 
-          <h3 className="mb-1 mt-4 font-medium">接口端点</h3>
+          <h3 className="mb-2 mt-5 text-[14px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">接口端点</h3>
           <div className="space-y-3 text-xs text-slate-500">
             {/* 保活端点（对明文凭证的探活生效：manual / proxy 来源均可） */}
             <div className="flex items-center gap-2">
@@ -590,13 +590,13 @@ export default function DoubaoSettings() {
         </section>
 
         {/* 右列：任务配置（会话保活 + 额度巡检 + 每日签到） */}
-        <section className="card p-4">
+        <section className="card p-5">
           <div className="mb-3 flex items-center gap-2">
             <ListChecks size={16} className="text-emerald-500" />
-            <h2 className="font-medium">任务配置</h2>
+            <h2 className="text-[15px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">任务配置</h2>
           </div>
 
-          <h3 className="mb-1 font-medium">会话保活（每日续期）</h3>
+          <h3 className="mb-1.5 text-[14px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">会话保活（每日续期）</h3>
           <div className="space-y-3 text-xs text-slate-500">
             <p>
               续期原理：字节 passport 为 <b>sid_guard 30 天滑动续期</b>。实测豆包桌面客户端 cookie 为客户端级加密
@@ -698,7 +698,7 @@ export default function DoubaoSettings() {
             )}
           </div>
 
-          <h3 className="mb-1 mt-4 font-medium">会员额度巡检</h3>
+          <h3 className="mb-2 mt-5 text-[14px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">会员额度巡检</h3>
           <div className="space-y-3 text-xs text-slate-500">
             {/* 每日额度巡检任务 */}
             <div className="flex flex-wrap items-center gap-2">
@@ -754,7 +754,7 @@ export default function DoubaoSettings() {
             </p>
           </div>
 
-          <h3 className="mb-1 mt-4 font-medium">每日签到</h3>
+          <h3 className="mb-2 mt-5 text-[14px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">每日签到</h3>
           <div className="space-y-3 text-xs text-slate-500">
             <p>
               签到端点已按抓包固化（<code className="rounded bg-slate-100 px-1 dark:bg-zinc-800">/alice/ug/campaign/landing/checkin</code>）。
@@ -856,7 +856,7 @@ export default function DoubaoSettings() {
 
           {/* 额度数据同步（对齐 Trae「积分数据同步」交互）：置于任务配置底部 */}
           <div className="mt-4 border-t border-slate-100 pt-3 dark:border-zinc-800">
-          <h3 className="mb-1 font-medium">额度数据同步</h3>
+          <h3 className="mb-1.5 text-[14px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">额度数据同步</h3>
           <div className="space-y-3 text-xs text-slate-500">
             <p>
               应用运行期间按所选模式自动拉取账号额度与累计额度（含额度窗口、会员等级、总额度）并回写本地账号池；

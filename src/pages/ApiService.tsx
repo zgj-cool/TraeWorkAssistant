@@ -1335,7 +1335,7 @@ export default function ApiService() {
       >
         <div className="text-sm">
           确认清除所有账号的冷却状态？
-          <div className="mt-1 text-xs text-slate-400">
+          <div className="mt-1.5 text-[11.5px] leading-relaxed text-slate-500 dark:text-zinc-400">
             清除后冷却中的账号将立即重新参与调度（若故障未恢复可能再次失败冷却）。
           </div>
         </div>
@@ -1366,7 +1366,7 @@ export default function ApiService() {
       >
         <div className="text-sm">
           确认清除模型「{editing?.id}」的 L1 人工覆盖？
-          <div className="mt-1 text-xs text-slate-400">
+          <div className="mt-1.5 text-[11.5px] leading-relaxed text-slate-500 dark:text-zinc-400">
             清除后恢复自动来源链（官网同步 &gt; 内置参考 &gt; 名称推断），人工值不可恢复。
           </div>
         </div>

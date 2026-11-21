@@ -10,20 +10,7 @@
     "beforeBuildCommand": "npm run build"
   },
   "app": {
-    "windows": [
-      {
-        "label": "main",
-        "title": "AI Work 助手",
-        "width": 1180,
-        "height": 760,
-        "minWidth": 960,
-        "minHeight": 600,
-        "decorations": false,
-        "resizable": true,
-        "center": true,
-        "maximized": true
-      }
-    ],
+    "windows": [],
     "security": {
       "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: asset: http://asset.localhost; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost; object-src 'none'; base-uri 'self'; form-action 'self'",
       "devCsp": null

@@ -310,11 +310,11 @@ function TaskConfigCard({
     <div className="card p-4">
       <div className="mb-3 flex items-center gap-2">
         <ListChecks size={16} className="text-emerald-500" />
-        <h2 className="font-medium">任务配置</h2>
+        <h2 className="text-[15px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">任务配置</h2>
       </div>
 
       {/* JWT Token 定时续期：refreshToken 配置 + 每周兜底任务（注册即生效） */}
-      <h3 className="mb-1 font-medium">JWT Token 定时续期</h3>
+      <h3 className="mb-1.5 text-[14px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">JWT Token 定时续期</h3>
       <div className="grid gap-3 lg:grid-cols-2">
         <label className="block">
           <span className="mb-1 block text-xs font-medium text-slate-500">保活阈值（天）</span>
@@ -349,7 +349,7 @@ function TaskConfigCard({
           </div>
           <div className="flex items-center gap-2">
             <select
-              className="input h-9 !w-24 text-sm"
+              className="input h-9 !w-28 text-sm"
               value={renewDay}
               onChange={(e) => setRenewDay(e.target.value)}
             >
@@ -372,10 +372,10 @@ function TaskConfigCard({
         </div>
       </div>
 
-      <div className="my-4 border-t border-slate-100 dark:border-zinc-800" />
+      <div className="my-4 border-t border-slate-200/60 dark:border-zinc-800/60" />
 
       {/* 每日自动签到：启动补签 + 每日签到任务（时刻可改） + UI 坐标点击兜底 */}
-      <h3 className="mb-1 font-medium">每日自动签到</h3>
+      <h3 className="mb-1.5 text-[14px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">每日自动签到</h3>
       <div className="space-y-3">
         <label className="flex items-start gap-2">
           <input
@@ -418,7 +418,7 @@ function TaskConfigCard({
               const n = Math.min(600, Math.max(0, Math.floor(Number(e.target.value))));
               setCheckinGap(Number.isFinite(n) ? n : 3);
             }}
-            className="input h-9 !w-20 text-sm"
+            className="input h-9 !w-28 text-sm"
           />
           <span className="text-xs text-slate-400">
             秒（多账号串行签到/成长的间隔，默认 3 秒防频控，0 = 关闭）
@@ -520,11 +520,11 @@ function TaskConfigCard({
         </div>
       </div>
 
-      <div className="my-4 border-t border-slate-100 dark:border-zinc-800" />
+      <div className="my-4 border-t border-slate-200/60 dark:border-zinc-800/60" />
 
       {/* 积分数据同步（原「积分与 Token 数据同步」改名）：看板数据定时刷新（模式/时刻随「保存配置」生效） */}
-      <h3 className="mb-1 font-medium">积分数据同步</h3>
-      <p className="mb-3 text-xs text-slate-400">
+      <h3 className="mb-1.5 text-[14px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">积分数据同步</h3>
+      <p className="mb-4 text-[12.5px] leading-relaxed text-slate-500 dark:text-zinc-400">
         应用运行期间按所选模式自动同步积分与 Token 看板数据（积分快照 + Token 统计重扫 + 官网用量刷新，一次配置管两个看板）；
         无可用凭证时静默跳过，失败 30 分钟后自动重试。模式与时刻随右上角「保存配置」生效。
       </p>
@@ -556,7 +556,7 @@ function TaskConfigCard({
                 const n = Math.min(24, Math.max(1, Math.round(Number(creditsForm.hours) || 2)));
                 setCreditsForm({ ...creditsForm, hours: String(n) });
               }}
-              className="input h-9 !w-20 text-sm"
+              className="input h-9 !w-28 text-sm"
             />
             <span className="text-xs text-slate-400">
               小时（1-24）；距上次成功同步满 {creditsForm.hours || '2'} 小时自动执行一次（含会话明细）
@@ -580,11 +580,11 @@ function TaskConfigCard({
         )}
       </div>
 
-      <div className="my-4 border-t border-slate-100 dark:border-zinc-800" />
+      <div className="my-4 border-t border-slate-200/60 dark:border-zinc-800/60" />
 
       {/* 自动成长：应用内调度器每日成长轮（开关/时刻随「保存配置」生效） */}
-      <h3 className="mb-1 font-medium">自动成长</h3>
-      <p className="mb-3 text-xs text-slate-400">
+      <h3 className="mb-1.5 text-[14px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">自动成长</h3>
+      <p className="mb-4 text-[12.5px] leading-relaxed text-slate-500 dark:text-zinc-400">
         应用运行期间每日到点自动执行成长轮（旅行 / 盲盒 / 任务，按下方开关项）；手动执行入口在「签到与成长」页。
         开关与时刻随右上角「保存配置」生效。
       </p>
@@ -877,11 +877,11 @@ export default function BuddySettings() {
         <div className="card p-4">
           <div className="mb-3 flex items-center gap-2">
             <SlidersHorizontal size={16} className="text-emerald-500" />
-            <h2 className="font-medium">通用配置</h2>
+            <h2 className="text-[15px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">通用配置</h2>
           </div>
 
           <div className="mb-1 flex items-center justify-between">
-            <h3 className="font-medium">应用环境</h3>
+            <h3 className="text-[14px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">应用环境</h3>
             <div className="flex items-center gap-2">
               <Badge tone={env?.installed ? 'green' : 'red'}>
                 WorkBuddy{env?.installed ? `已安装${env?.version ? ` v${env.version}` : ''}` : '未安装'}
@@ -947,7 +947,7 @@ export default function BuddySettings() {
             </div>
           </div>
 
-          <div className="my-4 border-t border-slate-100 dark:border-zinc-800" />
+          <div className="my-4 border-t border-slate-200/60 dark:border-zinc-800/60" />
 
           {/* 切换时自动迁移会话（F-74）：默认关；勾选即存，进度走切换进度流 */}
           <div className="mb-2 flex items-center gap-2 font-medium">

@@ -225,8 +225,8 @@ export default function GeneralSettingsPanel() {
   return (
     <div className="flex flex-col gap-4 text-sm">
       {/* 外观 */}
-      <section className="card p-4">
-        <h3 className="mb-3 font-medium">外观</h3>
+      <section className="card p-5">
+        <h3 className="mb-3 text-[14px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">外观</h3>
         <div className="grid gap-3 sm:grid-cols-2">
           <div>
             <label className="label">主题</label>
@@ -250,9 +250,9 @@ export default function GeneralSettingsPanel() {
       </section>
 
       {/* 应用显示（侧边栏应用 Tab：固定应用单选 + 显示勾选 + 拖拽排序 + 行首图标点击换图标） */}
-      <section className="card p-4">
-        <h3 className="mb-1 font-medium">应用显示</h3>
-        <p className="mb-3 text-xs text-slate-400">
+      <section className="card p-5">
+        <h3 className="mb-1.5 text-[14px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">应用显示</h3>
+        <p className="mb-4 text-[12.5px] leading-relaxed text-slate-500 dark:text-zinc-400">
           控制左下角侧边栏显示哪些应用。「固定应用」始终显示且不可隐藏（默认 Trae）；其余应用可自由勾选。
           「侧边栏显示」行可上下拖动调整展示顺序（保存后侧边栏应用 Tab 按新顺序排列）；
           隐藏仅收起入口，<b>不删除账号数据、不影响签到 / 保活等定时任务</b>，重新勾选即可恢复；
@@ -375,7 +375,7 @@ export default function GeneralSettingsPanel() {
                   <h3 className="mb-1 text-sm font-semibold text-slate-800 dark:text-zinc-100">
                     更换「{tab.label}」图标
                   </h3>
-                  <p className="mb-3 text-xs text-slate-400">
+                  <p className="mb-4 text-[12.5px] leading-relaxed text-slate-500 dark:text-zinc-400">
                     选择侧边栏显示图标，点底部「保存设置」生效；未设置时显示该应用官方 logo。
                   </p>
                   <div className="grid grid-cols-8 gap-1">
@@ -427,8 +427,8 @@ export default function GeneralSettingsPanel() {
         : null}
 
       {/* 通用与通知（两列布局：左选项/右开关组） */}
-      <section className="card p-4">
-        <h3 className="mb-3 font-medium">通用与通知</h3>
+      <section className="card p-5">
+        <h3 className="mb-3 text-[14px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">通用与通知</h3>
         <div className="grid gap-x-8 gap-y-3 text-sm sm:grid-cols-2">
           <div className="space-y-3">
             <div>
@@ -446,11 +446,11 @@ export default function GeneralSettingsPanel() {
                 type="number"
                 value={form.log_retention_days}
                 onChange={(e) => update('log_retention_days', Math.min(365, Math.max(1, Number(e.target.value) || 30)))}
-                className="input w-24"
+                className="input w-28"
                 min={1}
                 max={365}
               />
-              <p className="mt-1 text-xs text-slate-400">
+              <p className="mt-1.5 text-[11.5px] leading-relaxed text-slate-500 dark:text-zinc-400">
                 应用启动时自动清理超过保留天数的运行日志（代理 / 签到 / 切换日志）。
               </p>
             </div>
@@ -524,11 +524,11 @@ export default function GeneralSettingsPanel() {
       </section>
 
       {/* 通知渠道（F-19，全部应用共用） */}
-      <section className="card p-4">
+      <section className="card p-5">
         <div className="mb-1 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Bell size={16} className="text-amber-500" />
-            <h3 className="font-medium">通知渠道</h3>
+            <h3 className="text-[14px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">通知渠道</h3>
           </div>
           <button
             className="btn-outline !px-2.5 !py-1 text-xs"
@@ -539,7 +539,7 @@ export default function GeneralSettingsPanel() {
             <Send size={13} /> {testing ? '发送中…' : '发送测试'}
           </button>
         </div>
-        <p className="mb-3 text-xs text-slate-400">
+        <p className="mb-4 text-[12.5px] leading-relaxed text-slate-500 dark:text-zinc-400">
           签到完成 / 调度任务失败时推送到手机（Bark / Server酱 / PushPlus）或自建 Webhook，对全部应用（Trae、WorkBuddy、Qoder、豆包、Buddy 国际版）共用，
           未配置的渠道自动跳过；修改后点底部「保存设置」生效。
         </p>
@@ -656,10 +656,10 @@ export default function GeneralSettingsPanel() {
       </section>
 
       {/* 代理相关 */}
-      <section className="card p-4">
-        <h3 className="mb-1 font-medium">代理</h3>
-        <p className="mb-3 text-xs text-slate-400">本地 MITM 代理的端口与抓包行为，修改后需重启代理生效。</p>
-        <div className="space-y-3 text-sm">
+      <section className="card p-5">
+        <h3 className="mb-1.5 text-[14px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">代理</h3>
+        <p className="mb-4 text-[12.5px] leading-relaxed text-slate-500 dark:text-zinc-400">本地 MITM 代理的端口与抓包行为，修改后需重启代理生效。</p>
+        <div className="space-y-3.5 text-sm">
           <div className="grid gap-3 sm:grid-cols-2">
             <div>
               <label className="label">代理端口</label>
@@ -689,7 +689,7 @@ export default function GeneralSettingsPanel() {
               className="input min-h-[60px] text-xs"
               placeholder="trae.cn,trae.com.cn,mchost.guru,zijieapi.com,bytedance.com,volcengine.com,volces.com,treecode.com,doubao.com"
             />
-            <p className="mt-1 text-xs text-slate-400">
+            <p className="mt-1.5 text-[11.5px] leading-relaxed text-slate-500 dark:text-zinc-400">
               逗号分隔的域名后缀列表，即 <b>解密白名单</b>（同 Charles SSL Proxying）：列表内域名走
               MITM 解密并记录日志；未列出的域名透明直通、不记录。注意：做证书锁定（cert pinning）的客户端
               （如豆包 ttnet 原生栈）对其 API 域解密会被拒，应只列入需要抓取凭证/流量的具体域名
@@ -705,7 +705,7 @@ export default function GeneralSettingsPanel() {
               placeholder="留空则默认 %APPDATA%\AIWorkAssistant\logs"
               className="input"
             />
-            <p className="mt-1 text-xs text-slate-400">
+            <p className="mt-1.5 text-[11.5px] leading-relaxed text-slate-500 dark:text-zinc-400">
               代理拦截到的完整请求/响应将记录到此目录，按 100MB 滚动存储。
             </p>
           </div>

@@ -888,13 +888,13 @@ export default function BuddyAccounts() {
         <div className="mb-3 mt-5 flex flex-wrap items-center gap-2 text-sm">
           <button
             onClick={() => setFilter('all')}
-            className={`chip border ${filter === 'all' ? 'border-brand-500 text-brand-600' : 'border-slate-300 text-slate-500'}`}
+            className={`chip border ${filter === 'all' ? 'border-transparent bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900' : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 dark:border-zinc-700 dark:bg-zinc-900/60 dark:text-zinc-300'}`}
           >
             全部 ({accounts.length})
           </button>
           <button
             onClick={() => setFilter('ungrouped')}
-            className={`chip border ${filter === 'ungrouped' ? 'border-brand-500 text-brand-600' : 'border-slate-300 text-slate-500'}`}
+            className={`chip border ${filter === 'ungrouped' ? 'border-transparent bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900' : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 dark:border-zinc-700 dark:bg-zinc-900/60 dark:text-zinc-300'}`}
           >
             未分组 ({accounts.filter((a) => !a.group_id).length})
           </button>
@@ -902,7 +902,7 @@ export default function BuddyAccounts() {
             <button
               key={g.id}
               onClick={() => setFilter(g.id)}
-              className={`chip border ${filter === g.id ? 'border-brand-500 text-brand-600' : 'border-slate-300 text-slate-500'}`}
+              className={`chip border ${filter === g.id ? 'border-transparent bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900' : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 dark:border-zinc-700 dark:bg-zinc-900/60 dark:text-zinc-300'}`}
               style={{ borderColor: filter === g.id ? g.color : undefined }}
             >
               <span className="inline-block h-2 w-2 rounded-full" style={{ background: g.color }} />
@@ -924,7 +924,7 @@ export default function BuddyAccounts() {
       ) : (
         <div className="mt-5 card overflow-x-auto">
           <table className="w-full min-w-[980px] text-sm">
-            <thead className="bg-slate-50 text-xs uppercase text-slate-500 dark:bg-zinc-900">
+            <thead className="border-b border-slate-200/70 bg-slate-50/70 text-[11.5px] font-medium tracking-[0.01em] text-slate-500 dark:border-zinc-800/70 dark:bg-zinc-900/40 dark:text-zinc-400">
               <tr>
                 <th className="px-4 py-2 text-left">账号</th>
                 <th className="px-4 py-2 text-left">分组</th>
@@ -952,7 +952,7 @@ export default function BuddyAccounts() {
                 // 本行有异步操作执行中时，该行其余异步小按钮一并禁用（防连点/并发）
                 const rowOpKind = rowOp && rowOp.id === a.id ? rowOp.kind : null;
                 return (
-                  <tr key={a.id} className="row-hover border-t border-slate-200 dark:border-zinc-800">
+                  <tr key={a.id} className="row-hover border-t border-slate-200/70 dark:border-zinc-800">
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1.5">
                         <span className="font-medium">{a.nickname || a.id}</span>
@@ -1328,7 +1328,7 @@ export default function BuddyAccounts() {
       >
         <div className="text-sm">
           确定删除账号「{deleteFor?.nickname || deleteFor?.id}」？
-          <div className="mt-1 text-xs text-slate-400">仅移出账号池，不删除登录态快照与凭证文件。</div>
+          <div className="mt-1.5 text-[11.5px] leading-relaxed text-slate-500 dark:text-zinc-400">仅移出账号池，不删除登录态快照与凭证文件。</div>
         </div>
       </Modal>
 
@@ -1473,7 +1473,7 @@ export default function BuddyAccounts() {
           </>
         }
       >
-        <div className="space-y-3 text-sm">
+        <div className="space-y-3.5 text-sm">
           <div>导出账号池为 JSON 文件，可用于备份或迁移到其他设备。</div>
           <label className="flex items-start gap-2">
             <input
@@ -1514,7 +1514,7 @@ export default function BuddyAccounts() {
           </>
         }
       >
-        <div className="space-y-3 text-sm">
+        <div className="space-y-3.5 text-sm">
           <div className="flex items-start gap-2 rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-300">
             <ShieldAlert size={14} className="mt-0.5 shrink-0" />
             <span>
@@ -1531,7 +1531,7 @@ export default function BuddyAccounts() {
         onClose={() => setOauthOpen(false)}
         title="OAuth 登录"
       >
-        <div className="space-y-3 text-sm">
+        <div className="space-y-3.5 text-sm">
           <div className="flex items-center gap-2">
             {oauthStage === 'success' ? (
               <Badge tone="green">完成</Badge>
@@ -1594,7 +1594,7 @@ export default function BuddyAccounts() {
             ))}
           </div>
         ) : (
-          <div className="space-y-3 text-sm">
+          <div className="space-y-3.5 text-sm">
             <div className="rounded-lg bg-amber-50 p-3 text-xs text-amber-700 dark:bg-amber-500/10 dark:text-amber-300">
               将清除本机 WorkBuddy 的全部认证残留（客户端回到未登录态）。执行时会自动关闭 WorkBuddy；
               账号池与已备份的会话数据不受影响。请逐项确认：
@@ -1671,7 +1671,7 @@ export default function BuddyAccounts() {
           </button>
         }
       >
-        <div className="space-y-3 text-sm">
+        <div className="space-y-3.5 text-sm">
           {/* 目标应用切换（本地 state，默认 WorkBuddy；切换即重新拉取对应 profile 档案） */}
           <div className="flex items-center gap-2">
             <span className="text-xs font-medium text-slate-500">目标应用</span>
@@ -1762,7 +1762,7 @@ export default function BuddyAccounts() {
           ) : (
             <>
               <div>确定删除快照「{snapConfirm?.slot}」？</div>
-              <div className="mt-1 text-xs text-slate-400">删除后无法恢复；账号池中的账号与凭证副本不受影响。</div>
+              <div className="mt-1.5 text-[11.5px] leading-relaxed text-slate-500 dark:text-zinc-400">删除后无法恢复；账号池中的账号与凭证副本不受影响。</div>
             </>
           )}
         </div>

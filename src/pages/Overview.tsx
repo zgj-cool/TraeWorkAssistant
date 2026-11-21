@@ -127,7 +127,7 @@ export default function Overview() {
         desc="Trae · Buddy · Qoder 账号与积分一屏掌握 · 网关 Token 消耗分账号可见 · 点击指标直达对应明细"
         actions={
           <div className="flex items-center gap-2">
-            {updatedAt && <span className="text-xs text-slate-400">更新于 {new Date(updatedAt).toLocaleTimeString('zh-CN', { hour12: false })}</span>}
+            {updatedAt && <span className="text-[11px] text-slate-400 dark:text-zinc-500">更新于 {new Date(updatedAt).toLocaleTimeString('zh-CN', { hour12: false })}</span>}
             {refreshing && <Badge tone="blue"><Spinner className="mr-1 h-3 w-3" /> 积分后台刷新中</Badge>}
             {data?.wbOfficial?.stale && <Badge tone="amber" title={data.wbOfficial.stale_reason}>Buddy 官网用量过期缓存</Badge>}
             {failed.length > 0 && <Badge tone="amber" title={failed.join('、')}>{failed.length} 项数据源未加载</Badge>}
@@ -177,10 +177,15 @@ export default function Overview() {
                 onGo={(target, nav) => goPlatform(p.key, target, nav)}
               />
             ))
-          : [0, 1, 2].map((i) => <div key={i} className="card h-80 animate-pulse bg-slate-200/40 dark:bg-zinc-900" />)}
+          : [0, 1, 2].map((i) => (
+              <div
+                key={i}
+                className="card h-80 animate-pulse bg-slate-100/60 dark:bg-zinc-900/40"
+              />
+            ))}
       </div>
 
-      <p className="mt-4 text-xs leading-relaxed text-slate-400">
+      <p className="mt-5 text-[11.5px] leading-relaxed text-slate-500 dark:text-zinc-400">
         统计口径：Trae 今日已用取官网消耗明细（usage_history_fetch，缓存命中时标注）；Buddy 取官网用量聚合（workbuddy_usage_official_all），官网不可用时回退本地快照；Qoder 自动读取客户端登录会话后拉取官网消耗明细（按 begin_at 聚合名义消耗），会话不可用回退本地积分快照差分。Token 消耗取 API 网关按落日用量（Trae / Buddy / Qoder 三池，按账号归入对应平台卡片，与官网积分口径独立；BuddyAI / 自定义池见 API 管理页用量统计）。刷新仅重载缓存/本地数据，强制上游积分刷新请进入对应平台积分看板。
       </p>
     </div>

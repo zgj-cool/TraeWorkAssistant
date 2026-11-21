@@ -252,7 +252,7 @@ export default function BuddyAiCheckin() {
                 accounts.map((a) => {
                   const rec = todayByUid.get(a.id);
                   return (
-                    <tr key={a.id} className="border-t border-slate-100 dark:border-zinc-800">
+                    <tr key={a.id} className="border-t border-slate-200/60 dark:border-zinc-800/60">
                       <td className="px-3 py-1.5">
                         <div className="font-medium">{a.nickname || a.id}</div>
                         <div className="text-xs text-slate-400">{a.uid || a.id}</div>
@@ -331,7 +331,7 @@ export default function BuddyAiCheckin() {
       {lines.length > 0 && (
         <div className="card mt-4 p-4">
           <div className="mb-3 flex items-center justify-between">
-            <h3 className="font-medium">实时进度</h3>
+            <h3 className="text-[14px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">实时进度</h3>
             <div className="flex items-center gap-3">
               {running ? (
                 <Badge tone="blue">运行中</Badge>

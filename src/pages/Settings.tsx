@@ -207,17 +207,17 @@ export default function Settings() {
 
       <div className="grid items-start gap-4 md:grid-cols-2">
         {/* 左列：通用配置（应用环境 + 签到行为 + 设备标识重置） */}
-        <section className="card p-4">
+        <section className="card p-5">
           <div className="mb-3 flex items-center gap-2">
             <SlidersHorizontal size={16} className="text-emerald-500" />
-            <h2 className="font-medium">通用配置</h2>
+            <h2 className="text-[15px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">通用配置</h2>
           </div>
 
-          <h3 className="mb-1 font-medium">应用环境</h3>
-          <p className="mb-3 text-xs text-slate-400">
+          <h3 className="mb-1.5 text-[14px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">应用环境</h3>
+          <p className="mb-4 text-[12.5px] leading-relaxed text-slate-500 dark:text-zinc-400">
             Trae 客户端的安装路径，用于「打开应用」与「切换账号」时定位 exe；留空将自动探测。
           </p>
-          <div className="space-y-3 text-sm">
+          <div className="space-y-3.5 text-sm">
             <div>
               <label className="label">Trae 安装路径</label>
               <div className="flex items-center gap-2">
@@ -232,15 +232,15 @@ export default function Settings() {
                   <Search size={15} /> {detectingCn ? '检测中…' : '自动检测'}
                 </button>
               </div>
-              <p className="mt-1 text-xs text-slate-400">Trae 客户端（Trae CN）的 exe 路径。</p>
+              <p className="mt-1.5 text-[11.5px] leading-relaxed text-slate-500 dark:text-zinc-400">Trae 客户端（Trae CN）的 exe 路径。</p>
             </div>
           </div>
 
-          <div className="my-4 border-t border-slate-100 dark:border-zinc-800" />
+          <div className="my-4 border-t border-slate-200/60 dark:border-zinc-800/60" />
 
-          <h3 className="mb-1 font-medium">签到行为</h3>
-          <p className="mb-3 text-xs text-slate-400">批量签到时的默认跳过策略与重试参数，对所有签到入口生效。</p>
-          <div className="space-y-3 text-sm">
+          <h3 className="mb-1.5 text-[14px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">签到行为</h3>
+          <p className="mb-4 text-[12.5px] leading-relaxed text-slate-500 dark:text-zinc-400">批量签到时的默认跳过策略与重试参数，对所有签到入口生效。</p>
+          <div className="space-y-3.5 text-sm">
             <label className="flex items-center gap-2">
               <input
                 type="checkbox"
@@ -263,16 +263,16 @@ export default function Settings() {
                 type="number"
                 value={form.retry}
                 onChange={(e) => update('retry', Math.min(5, Math.max(0, Number(e.target.value) || 0)))}
-                className="input w-24"
+                className="input w-28"
                 min={0}
                 max={5}
               />
             </div>
           </div>
 
-          <div className="my-4 border-t border-slate-100 dark:border-zinc-800" />
+          <div className="my-4 border-t border-slate-200/60 dark:border-zinc-800/60" />
 
-          <h3 className="mb-1 font-medium">6 层设备标识重置</h3>
+          <h3 className="mb-1.5 text-[14px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">6 层设备标识重置</h3>
           <p className="mb-3 text-xs text-slate-500">
             一次性重置 Trae 应用的全部设备标识层：① machineid ② storage.json telemetry ③ storage.json aha.device ④
             TinyStorage ⑤ 注册表 MachineGuid ⑥ webview 追踪数据。用于账号隔离与防关联，执行前请先关闭对应应用。
@@ -297,10 +297,10 @@ export default function Settings() {
         </section>
 
         {/* 右列：任务配置（JWT 定时续期 + 每日定时签到） */}
-        <section className="card p-4">
+        <section className="card p-5">
           <div className="mb-3 flex items-center gap-2">
             <ListChecks size={16} className="text-emerald-500" />
-            <h2 className="font-medium">任务配置</h2>
+            <h2 className="text-[15px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">任务配置</h2>
           </div>
 
           {/* JWT Token 定时调度续期（issue #27）：应用内调度器，无需管理员权限 */}
@@ -315,7 +315,7 @@ export default function Settings() {
               启用
             </label>
           </h3>
-          <p className="mb-3 text-xs text-slate-400">
+          <p className="mb-4 text-[12.5px] leading-relaxed text-slate-500 dark:text-zinc-400">
             应用运行期间每日到点自动续期临期账号（惰性判定：JWT 剩余 &le;48h 或 refresh_token 临期才真正刷新，
             减少与 TRAE IDE 的双端互踢）。无 refresh_token 的账号自动跳过；刷新失败 30 分钟后自动重试。
           </p>
@@ -336,10 +336,10 @@ export default function Settings() {
             )}
           </div>
 
-          <div className="my-4 border-t border-slate-100 dark:border-zinc-800" />
+          <div className="my-4 border-t border-slate-200/60 dark:border-zinc-800/60" />
 
-          <h3 className="mb-1 font-medium">每日定时签到</h3>
-          <p className="mb-3 text-xs text-slate-400">
+          <h3 className="mb-1.5 text-[14px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">每日定时签到</h3>
+          <p className="mb-4 text-[12.5px] leading-relaxed text-slate-500 dark:text-zinc-400">
             应用内置 Rust 定时调度器：应用运行期间每日到点自动签到（晚于该时刻启动会自动补跑，无需管理员权限），
             触发时刻随底部「保存设置」生效。下方可注册 Windows 计划任务作为兜底，注册时间复用同一时刻，
             在应用未启动时直接运行签到（注册/删除需要管理员权限）。
@@ -371,7 +371,7 @@ export default function Settings() {
                 const n = Math.min(600, Math.max(0, Math.floor(Number(e.target.value))));
                 update('trae_checkin_gap_secs', Number.isFinite(n) ? n : 3);
               }}
-              className="input h-9 !w-24 text-sm"
+              className="input h-9 !w-28 text-sm"
             />
             <span className="text-xs text-slate-400">
               秒（多账号串行签到的间隔，默认 3 秒防频控，0 = 关闭）
@@ -400,11 +400,11 @@ export default function Settings() {
             </pre>
           )}
 
-          <div className="my-4 border-t border-slate-100 dark:border-zinc-800" />
+          <div className="my-4 border-t border-slate-200/60 dark:border-zinc-800/60" />
 
           {/* 积分数据同步：应用内置调度器（模式/时刻随底部「保存设置」生效） */}
-          <h3 className="mb-1 font-medium">积分数据同步</h3>
-          <p className="mb-3 text-xs text-slate-400">
+          <h3 className="mb-1.5 text-[14px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">积分数据同步</h3>
+          <p className="mb-4 text-[12.5px] leading-relaxed text-slate-500 dark:text-zinc-400">
             应用运行期间按所选模式自动拉取账号积分并刷新看板（含积分快照、到期数据与消耗明细）；无账号时静默跳过，
             失败 30 分钟后自动重试。模式与时刻随底部「保存设置」生效。
           </p>
@@ -434,7 +434,7 @@ export default function Settings() {
                     const n = Math.min(24, Math.max(1, Math.round(Number(e.target.value) || 2)));
                     update('trae_credits_sync_hours', String(n));
                   }}
-                  className="input h-9 !w-20 text-sm"
+                  className="input h-9 !w-28 text-sm"
                 />
                 <span className="text-xs text-slate-400">
                   小时（1-24）；距上次成功同步满 {form.trae_credits_sync_hours || '2'} 小时自动执行一次（含积分快照与消耗/会话明细）

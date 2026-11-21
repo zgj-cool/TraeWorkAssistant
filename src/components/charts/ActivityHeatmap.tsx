@@ -1,19 +1,14 @@
 import { useMemo } from 'react';
-import { useIsDark } from '../../lib/useIsDark';
+import { useChartTheme } from '../../lib/chartTheme';
 import { addDays, fmtDate } from '../../hooks/useDateRange';
 
 /**
  * 公共年度活动热力图（credits-dashboard-plan.md §4.2）：
- * 合并两处内联实现。GitHub 贡献图风格：周一为首列，53 周 × 7 行，值取 [0, max] 四档梯度。
+ * 合并两处内联实现。贡献图布局（周一为首列，53 周 × 7 行，值取 [0, max] 四档梯度），
+ * 配色走 chartTheme 的中性墨阶（不再使用 GitHub 绿，与整体「中性 + 单强调色」基调一致）。
  * 弹性布局：53 周列 flex-1 均分容器宽度（与面板同宽），格子 aspect-square 派生高度；
  * 窄容器回退横向滚动（min-w 640px）。
  */
-
-/** 绿色梯度：GitHub 明/暗两套色板 */
-const HEAT_COLORS = {
-  light: { empty: '#ebedf0', levels: ['#9be9a8', '#40c463', '#30a14e', '#216e39'] },
-  dark: { empty: '#27272a', levels: ['#0e4429', '#006d32', '#26a641', '#39d353'] },
-};
 
 export default function ActivityHeatmap({
   values,
@@ -29,7 +24,7 @@ export default function ActivityHeatmap({
   fmtValue?: (n: number) => string;
   emptyHint?: string;
 }) {
-  const isDark = useIsDark();
+  const chart = useChartTheme();
   const fmt = fmtValue ?? ((n: number) => n.toLocaleString('zh-CN'));
 
   const { weeks, monthLabels, max } = useMemo(() => {
@@ -59,7 +54,7 @@ export default function ActivityHeatmap({
     return { weeks: ws, monthLabels: ml, max: m };
   }, [values]);
 
-  const colors = isDark ? HEAT_COLORS.dark : HEAT_COLORS.light;
+  const colors = chart.heat;
   const heatColor = (v: number): string => {
     if (v <= 0 || max <= 0) return colors.empty;
     const r = v / max;

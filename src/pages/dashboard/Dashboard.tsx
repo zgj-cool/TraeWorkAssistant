@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { RefreshCw } from 'lucide-react';
 import PageHeader from '../../components/PageHeader';
+import { Badge, SegmentedTabs } from '../../components/ui';
 import { MultiSelectDropdown } from '../../components/MultiSelectDropdown';
 import { SOURCE_LABELS, SOURCES, type BoardSource } from '../../components/ChartFilterBar';
 import { api } from '../../lib/tauri';
@@ -776,21 +777,11 @@ export default function CreditsDashboard({ platform }: { platform: 'trae' | 'bud
 
       {/* 第一层分类：Tab 切换（左）+ 刷新（右） */}
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <div className="flex rounded-lg bg-slate-100 p-1 dark:bg-zinc-900">
-          {TABS.map((it) => (
-            <button
-              key={it.key}
-              className={`rounded-md px-3.5 py-1.5 text-xs font-medium ${
-                tab === it.key
-                  ? 'bg-white text-zinc-900 shadow-sm dark:bg-zinc-800 dark:text-zinc-100'
-                  : 'text-slate-500 dark:text-zinc-400'
-              }`}
-              onClick={() => setTab(it.key)}
-            >
-              {it.label}
-            </button>
-          ))}
-        </div>
+        <SegmentedTabs
+          value={tab}
+          onChange={(k) => setTab(k as BoardTab)}
+          options={TABS.map((t) => ({ key: t.key, label: t.label }))}
+        />
         <div className="flex flex-wrap items-center gap-2">
           {/* 顶部分组/账号筛选（P1 需求②）：平台视图内全局生效 */}
           <MultiSelectDropdown
@@ -814,22 +805,22 @@ export default function CreditsDashboard({ platform }: { platform: 'trae' | 'bud
             onChange={setAccountFilter}
           />
           {filtersActive && tab !== 'expiry' && tab !== 'sessions' && !(platform === 'trae' && activeSource === 'official') && (
-            <span
-              className="inline-flex items-center rounded-full bg-amber-100 px-2.5 py-0.5 text-[11px] font-medium text-amber-700 dark:bg-amber-900/40 dark:text-amber-300"
+            <Badge
+              tone="amber"
               title="当前数据源为聚合口径（无账号维度），筛选仅作用于 KPI 与到期日历；消耗/Token 明细不做静默截断"
             >
               该数据源不支持账号级筛选
-            </span>
+            </Badge>
           )}
           {/* 会话明细 Tab：顶部筛选仅收窄账号候选下拉、不进查询参数（后端 user_id 单值）——
               此前徽标豁免会话 Tab，用户误以为已按组过滤。明示语义断层（2026-10-12 审查） */}
           {filtersActive && tab === 'sessions' && (
-            <span
-              className="inline-flex items-center rounded-full bg-amber-100 px-2.5 py-0.5 text-[11px] font-medium text-amber-700 dark:bg-amber-900/40 dark:text-amber-300"
+            <Badge
+              tone="amber"
               title="顶部分组/账号筛选仅收窄会话页的账号候选下拉，不直接过滤查询结果；请使用会话页内的筛选行（时间/账号/模型）过滤"
             >
               顶部筛选仅收窄账号候选，会话结果按页内筛选过滤
-            </span>
+            </Badge>
           )}
           <button className="btn-outline" onClick={() => void refresh(true)} disabled={loading}>
             <RefreshCw size={15} className={loading ? 'animate-spin' : ''} /> 刷新数据
@@ -840,28 +831,18 @@ export default function CreditsDashboard({ platform }: { platform: 'trae' | 'bud
       {/* 第二层分类：数据源切换（积分统计 / Token 统计 Tab；到期/会话明细 Tab 无数据源维度） */}
       {tab !== 'expiry' && tab !== 'sessions' && (
         <div className="mb-4 flex flex-wrap items-center gap-2">
-          <span className="text-xs font-medium text-slate-500 dark:text-zinc-400">数据源</span>
-          <div className="flex rounded-lg bg-slate-100 p-1 dark:bg-zinc-900">
-            {SOURCES.map((s) => {
-              const reason = sourceDisabled[s];
-              return (
-                <button
-                  key={s}
-                  disabled={!!reason}
-                  title={reason ?? SOURCE_LABELS[s]}
-                  className={`rounded-md px-3 py-1 text-xs font-medium transition ${
-                    activeSource === s
-                      ? 'bg-white text-zinc-900 shadow-sm dark:bg-zinc-800 dark:text-zinc-100'
-                      : 'text-slate-500 dark:text-zinc-400'
-                  } ${reason ? 'cursor-not-allowed opacity-40' : ''}`}
-                  onClick={() => handleSourceChange(s)}
-                >
-                  {SOURCE_LABELS[s]}
-                </button>
-              );
-            })}
-          </div>
-          <span className="hidden text-xs text-slate-400 lg:inline">
+          <span className="text-[12px] font-medium text-slate-600 dark:text-zinc-400">数据源</span>
+          <SegmentedTabs
+            value={activeSource}
+            onChange={(k) => handleSourceChange(k as BoardSource)}
+            options={SOURCES.map((s) => ({
+              key: s,
+              label: SOURCE_LABELS[s],
+              disabled: !!sourceDisabled[s],
+              title: sourceDisabled[s] ?? SOURCE_LABELS[s],
+            }))}
+          />
+          <span className="hidden text-[12px] text-slate-500 dark:text-zinc-500 lg:inline">
             各源覆盖窗口与口径不同，面板内明示
           </span>
         </div>

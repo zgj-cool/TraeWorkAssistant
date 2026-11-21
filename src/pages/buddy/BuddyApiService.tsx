@@ -703,7 +703,7 @@ export default function BuddyApiService() {
                 {syncing ? '同步中…' : '同步官网模型'}
               </button>
             </div>
-            <p className="mb-3 text-xs text-slate-400">
+            <p className="mb-4 text-[12.5px] leading-relaxed text-slate-500 dark:text-zinc-400">
               从 Buddy 上游模型目录接口拉取并替换 wb_model_catalog.json（倍率/思考档位/图片模态以服务端为准）；
               网关启动时也会自动同步一次。
             </p>
@@ -738,7 +738,7 @@ export default function BuddyApiService() {
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full min-w-[560px] text-sm">
-                  <thead className="bg-slate-50 text-xs uppercase text-slate-500 dark:bg-zinc-900">
+                  <thead className="border-b border-slate-200/70 bg-slate-50/70 text-[11.5px] font-medium tracking-[0.01em] text-slate-500 dark:border-zinc-800/70 dark:bg-zinc-900/40 dark:text-zinc-400">
                     <tr>
                       <th className="px-3 py-2 text-left">模型 ID</th>
                       <th className="px-3 py-2 text-left">展示名</th>
@@ -751,7 +751,7 @@ export default function BuddyApiService() {
                   </thead>
                   <tbody>
                     {catalog.map((m) => (
-                      <tr key={m.id} className="row-hover border-t border-slate-200 dark:border-zinc-800">
+                      <tr key={m.id} className="row-hover border-t border-slate-200/70 dark:border-zinc-800">
                         <td className="px-3 py-2 font-mono text-xs">{m.id}</td>
                         <td className="px-3 py-2">{m.display || '—'}</td>
                         <td className="px-3 py-2 text-xs text-slate-500">

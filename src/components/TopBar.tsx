@@ -596,7 +596,7 @@ export default function TopBar() {
   const activeApp = useAppStore((s) => s.activeApp);
   const view = useAppStore((s) => s.view);
   return (
-    <div className="flex h-12 shrink-0 items-center justify-between border-b border-slate-200 bg-white px-4 dark:border-zinc-800 dark:bg-zinc-950">
+    <div className="flex h-12 shrink-0 items-center justify-between gap-3 border-b border-slate-200/70 bg-white/70 px-4 dark:border-zinc-800/60 dark:bg-zinc-950/50">
       {view === 'overview' ? (
         <OverviewTopBar />
       ) : activeApp === 'doubao' ? (

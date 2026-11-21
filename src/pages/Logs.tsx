@@ -192,7 +192,7 @@ function SystemLogsTab() {
         <p className="text-sm">
           将删除类型为「{TYPES.find((t) => t.v === type)?.label ?? type}」的日志文件，删除后不可恢复。
         </p>
-        <p className="mt-1 text-xs text-slate-400">日志文件会在后续写入时自动重建，不影响应用运行。</p>
+        <p className="mt-1.5 text-[11.5px] leading-relaxed text-slate-500 dark:text-zinc-400">日志文件会在后续写入时自动重建，不影响应用运行。</p>
       </Modal>
     </div>
   );
@@ -336,7 +336,8 @@ function ProxyLogsTab() {
             </div>
           ) : (
             <table className="w-full text-sm">
-              <thead className="sticky top-0 bg-slate-50 text-xs uppercase text-slate-500 dark:bg-zinc-900">
+              {/* 吸顶表头必须是实底：半透明会让滚动中的行文字透上来 */}
+              <thead className="sticky top-0 z-10 border-b border-slate-200/70 bg-slate-50 text-[11.5px] font-medium tracking-[0.01em] text-slate-500 dark:border-zinc-800/70 dark:bg-zinc-900 dark:text-zinc-400">
                 <tr>
                   <th className="px-3 py-2 text-left">时间</th>
                   <th className="px-3 py-2 text-left">方法</th>
@@ -611,8 +612,8 @@ function ApiRecentRequests() {
       {/* 请求表 */}
       <div className="max-h-[480px] overflow-auto rounded-lg border border-slate-200/70 dark:border-zinc-700/50">
         <table className="w-full table-fixed text-left text-xs">
-          <thead className="sticky top-0 bg-slate-50 text-[11px] text-slate-400 dark:bg-zinc-800/80 dark:text-zinc-500">
-            <tr className="border-b border-slate-200 dark:border-zinc-700">
+          <thead className="sticky top-0 z-10 bg-slate-50 text-[11.5px] font-medium text-slate-500 dark:bg-zinc-900 dark:text-zinc-400">
+            <tr className="border-b border-slate-200/70 dark:border-zinc-700/70">
               <th className="w-[13%] px-2 py-2 font-medium">时间</th>
               <th className="w-[19%] px-2 py-2 font-medium">端点</th>
               <th className="w-[14%] px-2 py-2 font-medium">模型</th>

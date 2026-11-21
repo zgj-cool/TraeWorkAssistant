@@ -337,7 +337,7 @@ export default function BuddyCheckin() {
             <Sparkles size={13} /> {growthRunning ? '执行中…' : running ? '签到中，请稍候' : '立即执行成长任务'}
           </button>
         </div>
-        <p className="mb-3 text-xs text-slate-400">
+        <p className="mb-4 text-[12.5px] leading-relaxed text-slate-500 dark:text-zinc-400">
           Buddy 旅行 / 盲盒 / 任务领奖为纯增量积分自动化，按下方开关逐账号链式执行；奖励数额以接口返回为准。
         </p>
         <div className="grid gap-3 lg:grid-cols-3">
@@ -450,7 +450,7 @@ export default function BuddyCheckin() {
                   // issue #180：实时行优先；无实时行（页面刷新后）回退今日记录的 pending 标记
                   const pending = live?.reward_pending === true || (!live && recsPendingOf(a.id));
                   return (
-                    <tr key={a.id} className="border-t border-slate-100 dark:border-zinc-800">
+                    <tr key={a.id} className="border-t border-slate-200/60 dark:border-zinc-800/60">
                       <td className="px-3 py-1.5">
                         <div className="font-medium">{a.nickname || a.uid}</div>
                         <div className="text-xs text-slate-400">{a.phone_masked || a.id}</div>
@@ -526,7 +526,7 @@ export default function BuddyCheckin() {
       {(running || lines.length > 0) && (
         <div className="mt-4 card p-4">
           <div className="mb-3 flex items-center justify-between">
-            <h3 className="font-medium">实时进度</h3>
+            <h3 className="text-[14px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">实时进度</h3>
             <div className="flex items-center gap-3">
               {running ? (
                 <Badge tone="blue">运行中</Badge>

@@ -238,7 +238,7 @@ export default function DoubaoCheckin() {
                   key={k}
                   onClick={() => setScope(k)}
                   disabled={running}
-                  className={`chip border disabled:opacity-50 ${scope === k ? 'border-brand-500 text-brand-600' : 'border-slate-300 text-slate-500'}`}
+                  className={`chip border disabled:opacity-50 ${scope === k ? 'border-transparent bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900' : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 dark:border-zinc-700 dark:bg-zinc-900/60 dark:text-zinc-300'}`}
                 >
                   {label}
                 </button>
@@ -300,7 +300,7 @@ export default function DoubaoCheckin() {
 
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
-                <thead className="bg-slate-50 text-xs uppercase text-slate-500 dark:bg-zinc-900">
+                <thead className="border-b border-slate-200/70 bg-slate-50/70 text-[11.5px] font-medium tracking-[0.01em] text-slate-500 dark:border-zinc-800/70 dark:bg-zinc-900/40 dark:text-zinc-400">
                   <tr>
                     {scope === 'selected' && <th className="w-10 px-3 py-2" />}
                     <th className="whitespace-nowrap px-3 py-2 text-left">账号</th>
@@ -315,7 +315,7 @@ export default function DoubaoCheckin() {
                     return (
                       <tr
                         key={a.user_id}
-                        className={`row-hover border-t border-slate-200 dark:border-zinc-800 ${eligible ? '' : 'opacity-60'}`}
+                        className={`row-hover border-t border-slate-200/70 dark:border-zinc-800 ${eligible ? '' : 'opacity-60'}`}
                       >
                         {scope === 'selected' && (
                           <td className="px-3 py-2">

@@ -337,7 +337,7 @@ export default function BuddyOverview() {
       {/* 近 30 天签到结果（从签到页移入，无数据显示空态） */}
       <div className="mt-5 card p-5">
         <div className="mb-4 flex items-center justify-between">
-          <h3 className="font-medium">近 30 天签到结果</h3>
+          <h3 className="text-[14px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">近 30 天签到结果</h3>
           <span className="text-xs text-slate-400">按日汇总 · 成功 / 已签 / 失败</span>
         </div>
         {trends.length === 0 ? (
@@ -383,7 +383,7 @@ export default function BuddyOverview() {
       <div className="mt-5 card p-5">
         <div className="mb-4 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <h3 className="font-medium">积分榜 Top 榜</h3>
+            <h3 className="text-[14px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">积分榜 Top 榜</h3>
             {top.length > 0 && (
               <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
                 Top {top.length}
@@ -452,7 +452,7 @@ export default function BuddyOverview() {
       <div className="mt-5 card overflow-hidden">
         <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3 dark:border-zinc-800">
           <div>
-            <h3 className="font-medium">配置导航</h3>
+            <h3 className="text-[14px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">配置导航</h3>
             <p className="text-xs text-slate-500">按步骤完成初始化，已完成的步骤无需重复处理。</p>
           </div>
           <Badge tone={allDone ? 'green' : 'amber'}>

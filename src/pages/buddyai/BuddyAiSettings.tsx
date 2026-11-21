@@ -210,11 +210,11 @@ export default function BuddyAiSettings() {
         <div className="card p-4">
           <div className="mb-3 flex items-center gap-2">
             <SlidersHorizontal size={16} className="text-emerald-500" />
-            <h2 className="font-medium">通用配置</h2>
+            <h2 className="text-[15px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">通用配置</h2>
           </div>
 
           <div className="mb-1 flex items-center justify-between">
-            <h3 className="font-medium">应用环境</h3>
+            <h3 className="text-[14px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">应用环境</h3>
             <div className="flex items-center gap-2">
               <Badge tone={locWb?.exe ? 'green' : 'red'}>
                 WorkBuddy AI{locWb?.exe ? `已安装${locWb.version ? ` v${locWb.version}` : ''}` : '未检测到'}
@@ -286,7 +286,7 @@ export default function BuddyAiSettings() {
         <div className="card p-4">
           <div className="mb-3 flex items-center gap-2">
             <ListChecks size={16} className="text-emerald-500" />
-            <h2 className="font-medium">任务配置</h2>
+            <h2 className="text-[15px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">任务配置</h2>
           </div>
           <div className="space-y-3">
             <TaskRow

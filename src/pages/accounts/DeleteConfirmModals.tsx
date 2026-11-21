@@ -33,7 +33,7 @@ export function DeleteAccountConfirmModal({
       <div className="text-sm">
         确认删除账号「{target?.name}」？
         {target?.device_id_masked && (
-          <div className="mt-1 text-xs text-slate-400">将一并清理该账号的设备 ID。</div>
+          <div className="mt-1.5 text-[11.5px] leading-relaxed text-slate-500 dark:text-zinc-400">将一并清理该账号的设备 ID。</div>
         )}
       </div>
     </Modal>
@@ -70,7 +70,7 @@ export function DeleteSlotConfirmModal({
     >
       <div className="text-sm">
         确认删除快照「{slot}」？
-        <div className="mt-1 text-xs text-slate-400">删除后需重新保存登录态才能再次切换到该账号。</div>
+        <div className="mt-1.5 text-[11.5px] leading-relaxed text-slate-500 dark:text-zinc-400">删除后需重新保存登录态才能再次切换到该账号。</div>
       </div>
     </Modal>
   );

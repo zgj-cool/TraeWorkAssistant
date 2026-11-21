@@ -3,6 +3,7 @@ import TitleBar from './components/TitleBar';
 import Sidebar from './components/Sidebar';
 import TopBar from './components/TopBar';
 import Toaster from './components/Toaster';
+import SplashScreen from './components/SplashScreen';
 import { useAppStore } from './store';
 import { api } from './lib/tauri';
 import { resolveTheme } from './lib/themes';
@@ -127,8 +128,12 @@ export default function App() {
   useEffect(() => {
     const mq = window.matchMedia('(prefers-color-scheme: dark)');
     const apply = () => {
-      const theme = useAppStore.getState().settings?.theme;
-      const t = resolveTheme(theme, mq.matches);
+      const cur = useAppStore.getState().settings;
+      // settings 未就绪时不改主题：此时首帧明暗已由 Rust 建窗时注入的初始化脚本
+      // 按「已保存主题」标好（见 main.rs initialization_script），若用系统偏好覆盖
+      // 会把正确的首帧改错，表现为启动页跳色；settings 到位后本 effect 重跑再对齐。
+      if (!cur) return;
+      const t = resolveTheme(cur.theme, mq.matches);
       document.documentElement.classList.toggle('dark', t.dark);
       document.documentElement.dataset.theme = t.id;
     };
@@ -160,19 +165,16 @@ export default function App() {
     };
   }, [settings?.auto_update_silent]);
 
+  // 启动加载页：原实现用 border-3（Tailwind 无此宽度类）导致 spinner 不可见，
+  // 加载阶段只剩一行文字；统一走 SplashScreen，动画与解析后的界面同源同色
   if (!ready) {
-    return (
-      <div className="flex h-full items-center justify-center bg-slate-100 dark:bg-zinc-950">
-        <div className="flex flex-col items-center gap-3">
-          <div className="h-8 w-8 animate-spin rounded-full border-3 border-zinc-400 border-t-transparent" />
-          <span className="text-sm text-slate-500">正在加载…</span>
-        </div>
-      </div>
-    );
+    return <SplashScreen />;
   }
 
   return (
-    <div className="flex h-full flex-col bg-slate-100 text-slate-800 dark:bg-zinc-950 dark:text-zinc-100">
+    // 不加淡入动画：启动页 → 主界面时 opacity 从 0 起跳会让窗口底色透出一帧
+    // （深色主题下即黑闪）。两屏底色一致，直接硬切不可见。
+    <div className="flex h-full flex-col bg-slate-50 text-slate-800 dark:bg-zinc-950 dark:text-zinc-100">
       <TitleBar />
       {/* issue #152：横向滚动容器。视口 < --app-min-width 时内容行整体滚动，不再挤压布局 */}
       <div className="min-h-0 flex-1 overflow-x-auto">
@@ -180,7 +182,7 @@ export default function App() {
           <Sidebar view={view} onNav={setView} />
           <main className="relative flex min-w-0 flex-1 flex-col">
             <TopBar />
-            <div className="relative min-h-0 flex-1 overflow-auto p-5">{renderView(view)}</div>
+            <div className="relative min-h-0 flex-1 overflow-auto p-6">{renderView(view)}</div>
           </main>
         </div>
       </div>

@@ -15,7 +15,7 @@ import {
 import ActivityHeatmap from '../../components/charts/ActivityHeatmap';
 import ExpiryCalendar, { type ExpiryItem } from '../../components/ExpiryCalendar';
 import { SOURCES, SOURCE_LABELS, type BoardSource } from '../../components/ChartFilterBar';
-import { StatCard, Badge } from '../../components/ui';
+import { StatCard, Badge, SegmentedTabs } from '../../components/ui';
 import PageHeader from '../../components/PageHeader';
 import { api } from '../../lib/tauri';
 import { useAppStore } from '../../store';
@@ -716,28 +716,16 @@ export default function BuddyAiCredits() {
 
       {/* 第一层分类：Tab 切换（左，胶囊分组样式对齐国内 Dashboard）+ 筛选/刷新（右） */}
       <div className="mb-3 mt-6 flex flex-wrap items-center justify-between gap-2">
-        <div className="flex rounded-lg bg-slate-100 p-1 dark:bg-zinc-900">
-          {(
-            [
-              ['credits', '积分统计'],
-              ['tokens', 'Token 统计'],
-              ['expiry', '积分到期'],
-              ['sessions', '会话明细'],
-            ] as const
-          ).map(([k, label]) => (
-            <button
-              key={k}
-              className={`rounded-md px-3.5 py-1.5 text-xs font-medium ${
-                tab === k
-                  ? 'bg-white text-zinc-900 shadow-sm dark:bg-zinc-800 dark:text-zinc-100'
-                  : 'text-slate-500 dark:text-zinc-400'
-              }`}
-              onClick={() => setTab(k)}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
+        <SegmentedTabs
+          value={tab}
+          onChange={(k) => setTab(k as 'credits' | 'tokens' | 'expiry' | 'sessions')}
+          options={[
+            { key: 'credits', label: '积分统计' },
+            { key: 'tokens', label: 'Token 统计' },
+            { key: 'expiry', label: '积分到期' },
+            { key: 'sessions', label: '会话明细' },
+          ]}
+        />
         <div className="flex flex-wrap items-center gap-2">
           {/* 分组/账号多选下拉（对齐国内 Dashboard MultiSelectDropdown：chips 触发 + 面板勾选；
               账号候选随分组筛选联动） */}
@@ -784,30 +772,20 @@ export default function BuddyAiCredits() {
             <span className="text-sm font-medium">积分统计</span>
             {/* 数据源切换（对齐国内 Dashboard 第二层分类：本地 / API网关 / 官网） */}
             <span className="text-[11px] text-slate-400">数据源</span>
-            <div className="flex rounded-lg bg-slate-100 p-1 dark:bg-zinc-900">
-              {SOURCES.map((s) => {
-                const tip =
+            <SegmentedTabs
+              value={creditsSource}
+              onChange={(k) => setCreditsSource(k as BoardSource)}
+              options={SOURCES.map((s) => ({
+                key: s,
+                label: SOURCE_LABELS[s],
+                title:
                   s === 'local'
                     ? '本地积分快照（buddy_ai_credits_history，每日同步落库；消耗为逐账号余额差分）'
                     : s === 'gateway'
                       ? 'API 网关用量记账（buddy_ai_days，模型倍率 × 用量，90 天窗口）'
-                      : '官网请求流水聚合（get-user-request-usage 全账号 31 天，10 分钟缓存）';
-                return (
-                  <button
-                    key={s}
-                    title={tip}
-                    className={`rounded-md px-3 py-1 text-xs font-medium transition ${
-                      creditsSource === s
-                        ? 'bg-white text-zinc-900 shadow-sm dark:bg-zinc-800 dark:text-zinc-100'
-                        : 'text-slate-500 dark:text-zinc-400'
-                    }`}
-                    onClick={() => setCreditsSource(s)}
-                  >
-                    {SOURCE_LABELS[s]}
-                  </button>
-                );
-              })}
-            </div>
+                      : '官网请求流水聚合（get-user-request-usage 全账号 31 天，10 分钟缓存）',
+              }))}
+            />
             <span className="text-[11px] text-slate-400">
               {creditsSource === 'local'
                 ? '快照 earned 获得 · 余额差分消耗'
@@ -1015,27 +993,19 @@ export default function BuddyAiCredits() {
             <span className="text-sm font-medium">Token 统计</span>
             {/* 数据源切换（对齐国内 Dashboard 第二层分类；官网源 BuddyAI 无接口 → 禁用） */}
             <span className="text-[11px] text-slate-400">数据源</span>
-            <div className="flex rounded-lg bg-slate-100 p-1 dark:bg-zinc-900">
-              {SOURCES.map((s) => {
-                const reason =
-                  s === 'official' ? 'BuddyAI 官网未提供按日 token 明细接口' : undefined;
-                return (
-                  <button
-                    key={s}
-                    disabled={!!reason}
-                    title={reason ?? SOURCE_LABELS[s]}
-                    className={`rounded-md px-3 py-1 text-xs font-medium transition ${
-                      tokensSource === s
-                        ? 'bg-white text-zinc-900 shadow-sm dark:bg-zinc-800 dark:text-zinc-100'
-                        : 'text-slate-500 dark:text-zinc-400'
-                    } ${reason ? 'cursor-not-allowed opacity-40' : ''}`}
-                    onClick={() => setTokensSource(s)}
-                  >
-                    {SOURCE_LABELS[s]}
-                  </button>
-                );
-              })}
-            </div>
+            <SegmentedTabs
+              value={tokensSource}
+              onChange={(k) => setTokensSource(k as BoardSource)}
+              options={SOURCES.map((s) => ({
+                key: s,
+                label: SOURCE_LABELS[s],
+                disabled: s === 'official',
+                title:
+                  s === 'official'
+                    ? 'BuddyAI 官网未提供按日 token 明细接口'
+                    : SOURCE_LABELS[s],
+              }))}
+            />
             <span className="text-[11px] text-slate-400">
               {tokensSource === 'local'
                 ? tokenStats
@@ -1579,7 +1549,7 @@ export default function BuddyAiCredits() {
         ) : (
           <div className="card overflow-hidden">
             <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3 dark:border-zinc-800">
-              <h3 className="font-medium">会话明细</h3>
+              <h3 className="text-[14px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">会话明细</h3>
               <span className="text-xs text-slate-400">
                 {sessData
                   ? `共 ${sessData.total.toLocaleString()} 条请求 · 区间合计 ${sessData.credits_total.toFixed(2)} 积分`
@@ -1588,7 +1558,7 @@ export default function BuddyAiCredits() {
             </div>
             <div className="overflow-x-auto">
               <table className="w-full min-w-[720px] text-sm">
-                <thead className="bg-slate-50 text-xs uppercase text-slate-500 dark:bg-zinc-900">
+                <thead className="border-b border-slate-200/70 bg-slate-50/70 text-[11.5px] font-medium tracking-[0.01em] text-slate-500 dark:border-zinc-800/70 dark:bg-zinc-900/40 dark:text-zinc-400">
                   <tr>
                     <th className="px-4 py-2 text-left">时间</th>
                     <th className="px-4 py-2 text-left">账号</th>
@@ -1601,7 +1571,7 @@ export default function BuddyAiCredits() {
                   {(sessData?.rows ?? []).map((r, idx) => (
                     <tr
                       key={`${r.user_id}-${r.session_id || 'x'}-${r.ts}-${idx}`}
-                      className="border-t border-slate-200 dark:border-zinc-800"
+                      className="border-t border-slate-200/70 dark:border-zinc-800"
                     >
                       <td className="whitespace-nowrap px-4 py-2 text-xs tabular-nums text-slate-500">
                         {new Date(r.ts * 1000).toLocaleString()}

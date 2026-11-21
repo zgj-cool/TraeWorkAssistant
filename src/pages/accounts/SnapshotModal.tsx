@@ -64,7 +64,7 @@ export function ProfileModal({
           <div className="py-6 text-center text-xs text-slate-400">暂无快照</div>
         ) : (
           <table className="w-full text-sm">
-            <thead className="bg-slate-50 text-xs uppercase text-slate-500 dark:bg-zinc-900">
+            <thead className="border-b border-slate-200/70 bg-slate-50/70 text-[11.5px] font-medium tracking-[0.01em] text-slate-500 dark:border-zinc-800/70 dark:bg-zinc-900/40 dark:text-zinc-400">
               <tr>
                 <th className="whitespace-nowrap px-3 py-2 text-left">账号 (user_id)</th>
                 <th className="whitespace-nowrap px-3 py-2 text-right">文件数</th>
@@ -77,7 +77,7 @@ export function ProfileModal({
               {profiles.map((p) => (
                 <tr
                   key={p.slot}
-                  className="row-hover border-t border-slate-200 dark:border-zinc-800"
+                  className="row-hover border-t border-slate-200/70 dark:border-zinc-800"
                 >
                   <td className="whitespace-nowrap px-3 py-2 font-mono text-xs">{p.slot}</td>
                   <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums">{p.file_count}</td>

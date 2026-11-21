@@ -762,7 +762,7 @@ export default function QoderApiService() {
                 {syncing ? '同步中…' : '同步目录'}
               </button>
             </div>
-            <p className="mb-3 text-xs text-slate-400">
+            <p className="mb-4 text-[12.5px] leading-relaxed text-slate-500 dark:text-zinc-400">
               从 Qoder CN 网关 model/list 拉取并替换目录缓存（倍率/思考档位/图片模态以服务端为准）。
             </p>
             {/* 定时同步（app Settings）：应用内置调度器每日到点自动执行，无账号时静默跳过 */}
@@ -825,7 +825,7 @@ export default function QoderApiService() {
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full min-w-[720px] text-sm">
-                  <thead className="bg-slate-50 text-xs uppercase text-slate-500 dark:bg-zinc-900">
+                  <thead className="border-b border-slate-200/70 bg-slate-50/70 text-[11.5px] font-medium tracking-[0.01em] text-slate-500 dark:border-zinc-800/70 dark:bg-zinc-900/40 dark:text-zinc-400">
                     <tr>
                       <th className="px-3 py-2 text-left">模型 ID</th>
                       <th className="px-3 py-2 text-left">展示名</th>
@@ -848,7 +848,7 @@ export default function QoderApiService() {
                     {models.map((m) => {
                       const ctxTokens = ctxMap.get(m.id.trim().toLowerCase());
                       return (
-                      <tr key={m.id} className="row-hover border-t border-slate-200 dark:border-zinc-800">
+                      <tr key={m.id} className="row-hover border-t border-slate-200/70 dark:border-zinc-800">
                         <td className="px-3 py-2 font-mono text-xs">{m.id}</td>
                         <td className="px-3 py-2">{m.display || '—'}</td>
                         <td className="px-3 py-2 text-xs text-slate-500">{m.vendor || '—'}</td>

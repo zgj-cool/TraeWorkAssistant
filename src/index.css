@@ -18,6 +18,10 @@
   --c-zinc-900: 24 24 27;
   --c-zinc-950: 9 9 11;
 
+  /* 视觉基座（清爽化）：圆角与会话层级统一收口，改一处全站生效 */
+  --radius-card: 14px;
+  --radius-control: 9px;
+
   /* 全局最小逻辑宽度（issue #152）：高 DPI 缩放下 WebView 逻辑视口可能被压到
      1024px 以下导致布局挤压不可用。视口 ≥ 此值时自动铺满，< 此值时整体出横向
      滚动条而非挤压。调整只需改这一行。
@@ -93,8 +97,17 @@ body,
 
 body {
   margin: 0;
+  /* 正文行高：中文长段落在 1.6 行高下更易读（原浏览器默认 1.5 偏挤） */
+  line-height: 1.6;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+}
+
+/* 标题统一收紧字距，长中文标题更利落 */
+h1,
+h2,
+h3 {
+  letter-spacing: -0.01em;
 }
 
 /* 选区色：跟随主题的中性强调（浅色石墨 / 深色随 zinc 变量） */
@@ -127,47 +140,131 @@ html.dark a:focus-visible {
   height: 10px;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(130, 130, 150, 0.5);
+  background: rgba(130, 130, 150, 0.45);
   border-radius: 5px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(130, 130, 150, 0.7);
+  background: rgba(130, 130, 150, 0.68);
 }
 
 @layer components {
+  /* 卡片：发丝描边 + 极轻投影，靠背景层次而非重阴影表达「面」 */
   .card {
-    @apply rounded-2xl border border-slate-200/70 bg-white shadow-soft transition-[box-shadow,transform] duration-200 dark:border-zinc-800 dark:bg-zinc-900/80;
+    @apply rounded-[var(--radius-card)] border border-slate-200/80 bg-white transition-[box-shadow,border-color,transform] duration-200 dark:border-zinc-800/80 dark:bg-zinc-900/70;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  }
+  html.dark .card {
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.28);
   }
   .btn {
-    @apply inline-flex select-none items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100;
+    @apply inline-flex select-none items-center justify-center gap-1.5 whitespace-nowrap rounded-[var(--radius-control)] px-3 py-[7px] text-[13px] font-medium leading-5 transition active:scale-[0.985] disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100;
   }
   .btn-primary {
-    @apply btn bg-zinc-900 text-white shadow-soft hover:bg-zinc-800 active:bg-black dark:bg-white dark:text-zinc-900 dark:hover:bg-zinc-200 dark:active:bg-white;
+    @apply btn bg-zinc-900 text-white hover:bg-zinc-800 active:bg-black dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white dark:active:bg-zinc-200;
   }
   .btn-ghost {
-    @apply btn text-slate-600 hover:bg-slate-100 dark:text-zinc-300 dark:hover:bg-zinc-800;
+    @apply btn text-slate-600 hover:bg-slate-100/80 hover:text-slate-900 dark:text-zinc-300 dark:hover:bg-zinc-800/70 dark:hover:text-zinc-100;
   }
   .btn-outline {
-    @apply btn border border-slate-300 text-slate-700 hover:bg-slate-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800;
+    @apply btn border border-slate-300/80 bg-white text-slate-700 hover:border-slate-400/70 hover:bg-slate-50 dark:border-zinc-700/80 dark:bg-zinc-900/60 dark:text-zinc-200 dark:hover:bg-zinc-800/70;
   }
   .btn-danger {
     @apply btn bg-rose-600 text-white hover:bg-rose-500 active:bg-rose-700;
   }
   .input {
-    @apply w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-zinc-500 focus:ring-2 focus:ring-zinc-500/20 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100;
+    @apply w-full rounded-[var(--radius-control)] border border-slate-300/80 bg-white px-3 py-2 text-[13px] text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-zinc-400 focus:ring-[3px] focus:ring-zinc-400/15 dark:border-zinc-700/80 dark:bg-zinc-900 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-zinc-500 dark:focus:ring-zinc-400/20;
   }
   .label {
-    @apply mb-1 block text-xs font-medium text-slate-500 dark:text-zinc-400;
+    @apply mb-1.5 block text-[12px] font-medium text-slate-600 dark:text-zinc-400;
   }
   .chip {
-    @apply inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium;
+    @apply inline-flex items-center gap-1 rounded-md border border-transparent px-2 py-0.5 text-[11.5px] font-medium leading-5;
+  }
+  /* 表格内的徽标加密一档：列宽紧张，徽标越小越不打断纵向阅读（账号/日志/会话等表格通用） */
+  td .chip,
+  th .chip {
+    @apply px-1.5 py-0 text-[11px];
   }
   /* 可交互卡片悬浮反馈（配合 cursor-pointer 使用；静态卡不加） */
   .card-hover {
-    @apply cursor-pointer transition-all duration-200 hover:-translate-y-0.5 hover:shadow-soft-lg;
+    @apply cursor-pointer transition-all duration-200 hover:-translate-y-0.5 hover:border-slate-300/80 hover:shadow-soft-lg dark:hover:border-zinc-700/80;
   }
   /* 数据表行悬浮反馈（统一 Logs 表既有手感，浅色 slate-50 / 深色 zinc-800/40） */
   .row-hover {
     @apply transition-colors hover:bg-slate-50/80 dark:hover:bg-zinc-800/40;
+  }
+}
+
+/* ---------- 可读性基线（全局，无需逐页改色） ---------- */
+/* 1) 浅色下 slate-400（#94a3b8）对白底仅 ≈2.6:1，作为说明/辅助正文偏浅；
+      统一压深到 slate-500（≈4.7:1）。
+   2) 深色下 zinc-500（#71717a）对 zinc-950 仅 ≈3.6:1，统一提亮到 zinc-400（≈7:1）。
+   两条都写在 utilities 层内、特异度恰好为 (0,1,1)：压过基础工具类 (0,1,0)，
+   但 hover:/focus: 等状态变体 (0,2,0) 仍然生效，不影响交互反馈。 */
+@layer utilities {
+  :where(html:not(.dark)) body .text-slate-400 {
+    color: #64748b;
+  }
+  :where(html.dark) body .text-zinc-500 {
+    color: #a1a1aa;
+  }
+}
+
+/* ---------- 启动页（方案 A · 极简细线）动画原语 ---------- */
+@keyframes splash-sweep {
+  0% {
+    transform: translateX(-115%);
+  }
+  100% {
+    transform: translateX(360%);
+  }
+}
+@keyframes splash-breathe {
+  0%,
+  100% {
+    opacity: 0.18;
+    transform: translateY(0);
+  }
+  45% {
+    opacity: 0.9;
+    transform: translateY(-1px);
+  }
+}
+/* 说明：启动页（SplashScreen / index.html 首屏骨架）刻意不做入场动画——
+   两侧带 opacity:0 的入场会让交接瞬间只剩底色（深色主题下即黑闪）。 */
+
+@layer components {
+  .splash-bar {
+    @apply relative block h-[2px] w-[188px] overflow-hidden rounded-full bg-slate-300/70 dark:bg-zinc-700/60;
+  }
+  .splash-bar > i {
+    @apply absolute inset-y-0 left-0 block w-[42%] rounded-full bg-zinc-700 dark:bg-zinc-300;
+    animation: splash-sweep 1.5s cubic-bezier(0.45, 0, 0.25, 1) infinite;
+  }
+  .splash-dots {
+    @apply inline-flex items-center gap-[4px];
+  }
+  .splash-dots > i {
+    @apply block h-[3px] w-[3px] rounded-full bg-current;
+    opacity: 0.2;
+    animation: splash-breathe 1.2s ease-in-out infinite;
+  }
+  .splash-dots > i:nth-child(2) {
+    animation-delay: 0.16s;
+  }
+  .splash-dots > i:nth-child(3) {
+    animation-delay: 0.32s;
+  }
+}
+
+/* 减少动态偏好：关闭启动页循环动画，仅保留静态指示 */
+@media (prefers-reduced-motion: reduce) {
+  .splash-bar > i,
+  .splash-dots > i {
+    animation: none !important;
+  }
+  .splash-bar > i {
+    width: 100%;
+    opacity: 0.4;
   }
 }

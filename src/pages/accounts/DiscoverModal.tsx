@@ -24,7 +24,7 @@ export function DiscoverModal({
   const notInPool = discovered?.filter((d) => !d.in_pool).length ?? 0;
   return (
     <Modal open={open} onClose={onClose} title="扫描本机登录账号" size="lg">
-      <div className="space-y-3 text-sm">
+      <div className="space-y-3.5 text-sm">
         <p className="text-xs leading-relaxed text-slate-500 dark:text-zinc-400">
           扫描本机 Trae 客户端的 <code className="rounded bg-slate-100 px-1 dark:bg-zinc-800">storage.json</code> 与
           {' '}<code className="rounded bg-slate-100 px-1 dark:bg-zinc-800">state.vscdb</code>，

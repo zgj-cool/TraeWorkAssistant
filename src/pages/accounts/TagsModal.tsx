@@ -86,7 +86,7 @@ export function TagsModal({
         </>
       }
     >
-      <p className="mb-3 text-xs text-slate-400">
+      <p className="mb-4 text-[12.5px] leading-relaxed text-slate-500 dark:text-zinc-400">
         标签为多选标注（分组为单选归属，两者独立）。删除标签后所有账号的该标签绑定与调度/Key 引用会被一并清理。
       </p>
       <div className="mb-4 space-y-3">

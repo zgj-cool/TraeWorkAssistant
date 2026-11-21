@@ -304,11 +304,11 @@ export default function ExpiryTab({
       ) : (
         <div className="card overflow-hidden">
           <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3 dark:border-zinc-800">
-            <h3 className="font-medium">账号积分明细</h3>
+            <h3 className="text-[14px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">账号积分明细</h3>
             <span className="text-xs text-slate-400">按可用积分降序 · {rows.length} 个账号</span>
           </div>
           <table className="w-full text-sm">
-            <thead className="bg-slate-50 text-xs uppercase text-slate-500 dark:bg-zinc-900">
+            <thead className="border-b border-slate-200/70 bg-slate-50/70 text-[11.5px] font-medium tracking-[0.01em] text-slate-500 dark:border-zinc-800/70 dark:bg-zinc-900/40 dark:text-zinc-400">
               <tr>
                 <th className="px-4 py-2 text-left">平台</th>
                 <th className="px-4 py-2 text-left">账号</th>
@@ -322,7 +322,7 @@ export default function ExpiryTab({
             </thead>
             <tbody>
               {rows.map((r) => (
-                <tr key={r.key} className="row-hover border-t border-slate-200 dark:border-zinc-800">
+                <tr key={r.key} className="row-hover border-t border-slate-200/70 dark:border-zinc-800">
                   <td className="px-4 py-2">
                     <Badge tone={r.platform === 'Trae' ? 'blue' : r.platform === 'Buddy' ? 'violet' : 'amber'}>
                       {r.platform}
@@ -387,7 +387,7 @@ export default function ExpiryTab({
 
       {/* ② 积分到期日历（复用 ExpiryCalendar，三平台 items 拼装） */}
       <div className="card p-4">
-        <h3 className="mb-3 font-medium">积分到期日历</h3>
+        <h3 className="mb-3 text-[14px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">积分到期日历</h3>
         <ExpiryCalendar
           items={expiryItems}
           emptyHint="暂无到期项：待账号完成签到/积分查询后展示积分包与会员到期时间。"

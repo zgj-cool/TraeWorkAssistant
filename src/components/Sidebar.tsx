@@ -161,48 +161,32 @@ export default function Sidebar({
   };
 
   return (
-    <aside className="sticky left-0 z-10 flex w-52 shrink-0 flex-col border-r border-slate-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
-      <nav className="flex-1 space-y-1 p-3">
+    <aside className="sticky left-0 z-10 flex w-52 shrink-0 flex-col border-r border-slate-200/70 bg-white dark:border-zinc-800/70 dark:bg-zinc-900/30">
+      <nav className="flex-1 space-y-0.5 p-3">
         {/* 跨平台总览：常驻顶部，不随应用 Tab 切换 */}
-        <button
+        <NavButton
+          active={view === 'overview'}
+          icon={LayoutDashboard}
+          label="总览"
           onClick={() => onNav('overview')}
-          className={cn(
-            'flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition active:scale-[0.98]',
-            view === 'overview'
-              ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900'
-              : 'text-slate-600 hover:bg-slate-100 dark:text-zinc-400 dark:hover:bg-zinc-800',
-          )}
           title="Trae / Buddy / Qoder / 豆包 一屏总览"
-        >
-          <LayoutDashboard size={17} />
-          总览
-        </button>
-        <div className="!my-2 border-t border-slate-100 dark:border-zinc-800" />
-        {nav.map((item) => {
-          const Icon = item.icon;
-          const active = view === item.key;
-          return (
-            <button
-              key={item.key}
-              onClick={() => onNav(item.key)}
-              className={cn(
-                'flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition active:scale-[0.98]',
-                active
-                  ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900'
-                  : 'text-slate-600 hover:bg-slate-100 dark:text-zinc-400 dark:hover:bg-zinc-800',
-              )}
-            >
-              <Icon size={17} />
-              {item.label}
-            </button>
-          );
-        })}
+        />
+        <div className="!my-2 border-t border-slate-200/70 dark:border-zinc-800" />
+        {nav.map((item) => (
+          <NavButton
+            key={item.key}
+            active={view === item.key}
+            icon={item.icon}
+            label={item.label}
+            onClick={() => onNav(item.key)}
+          />
+        ))}
       </nav>
       {/* 应用切换 Tab（位于左下角工具图标行上方；显示项由系统设置「应用显示」控制） */}
-      <div className="border-t border-slate-200 p-3 dark:border-zinc-800">
+      <div className="border-t border-slate-200/70 p-3 dark:border-zinc-800/70">
         <div
           className={cn(
-            'grid gap-1 rounded-lg bg-slate-100 p-1 dark:bg-zinc-900',
+            'grid gap-1 rounded-[10px] bg-slate-100/80 p-1 dark:bg-zinc-800/50',
             GRID_COLS[tabCols - 1] ?? 'grid-cols-4',
           )}
         >
@@ -220,8 +204,8 @@ export default function Sidebar({
                   'flex flex-col items-center gap-0.5 rounded-md px-1 py-1.5 text-[11px] font-medium transition active:scale-[0.97]',
                   tab.disabled && 'cursor-not-allowed opacity-40',
                   active
-                    ? 'bg-white text-zinc-900 shadow-sm dark:bg-zinc-800 dark:text-zinc-100'
-                    : 'text-slate-500 hover:text-slate-700 dark:text-zinc-500 dark:hover:text-zinc-300',
+                    ? 'bg-white text-slate-900 shadow-[0_1px_2px_rgba(15,23,42,0.08)] dark:bg-zinc-700/80 dark:text-white'
+                    : 'text-slate-500 hover:text-slate-800 dark:text-zinc-500 dark:hover:text-zinc-300',
                 )}
               >
                 {CustomIcon ? (
@@ -240,11 +224,11 @@ export default function Sidebar({
           })}
         </div>
       </div>
-      <div className="flex items-center justify-center gap-1 border-t border-slate-200 p-3 dark:border-zinc-800">
+      <div className="flex items-center justify-center gap-1 border-t border-slate-200/70 p-3 dark:border-zinc-800/70">
         {/* API 管理入口（统一网关 §5.1，原 Github 图标位置） */}
         <button
           onClick={() => setShowApiManager(true)}
-          className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 active:scale-90 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
+          className={footerBtn}
           aria-label="API 管理"
           title="API 管理（统一网关：启停 / 接口配置 / API Keys / 生态接入 / 用量统计）"
         >
@@ -252,7 +236,7 @@ export default function Sidebar({
         </button>
         <button
           onClick={() => setShowSystem(true)}
-          className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 active:scale-90 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
+          className={footerBtn}
           aria-label="系统设置与系统日志查看"
           title="系统设置与系统日志查看"
         >
@@ -260,7 +244,7 @@ export default function Sidebar({
         </button>
         <button
           onClick={() => void cycleTheme()}
-          className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 active:scale-90 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
+          className={footerBtn}
           aria-label="切换主题"
           title="切换主题（在所有主题间轮询）"
         >
@@ -268,7 +252,7 @@ export default function Sidebar({
         </button>
         <button
           onClick={() => setShowAbout(true)}
-          className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 active:scale-90 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
+          className={footerBtn}
           aria-label="软件说明"
           title="软件说明（版本 / 概述 / 作者 / 版权）"
         >
@@ -278,5 +262,42 @@ export default function Sidebar({
       <AboutDialog open={showAbout} onClose={() => setShowAbout(false)} />
       <SystemDialog open={showSystem} onClose={() => setShowSystem(false)} />
     </aside>
+  );
+}
+
+const footerBtn =
+  'flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 active:bg-slate-200/70 dark:text-zinc-500 dark:hover:bg-zinc-800/70 dark:hover:text-zinc-200';
+
+/** 侧栏导航项：弱化底色的选中态 + 左侧极短强调条（替代整块黑底，降低视觉重量） */
+function NavButton({
+  active,
+  icon: Icon,
+  label,
+  onClick,
+  title,
+}: {
+  active: boolean;
+  icon: typeof Users;
+  label: string;
+  onClick: () => void;
+  title?: string;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      className={cn(
+        'relative flex w-full items-center gap-2.5 rounded-[10px] py-2 pl-3.5 pr-3 text-[13px] font-medium transition-colors',
+        active
+          ? 'bg-slate-100 text-slate-900 dark:bg-zinc-800/70 dark:text-zinc-50'
+          : 'text-slate-500 hover:bg-slate-100/60 hover:text-slate-800 dark:text-zinc-400 dark:hover:bg-zinc-800/40 dark:hover:text-zinc-200',
+      )}
+    >
+      {active && (
+        <span className="absolute left-0 top-1/2 h-4 w-[3px] -translate-y-1/2 rounded-r-full bg-zinc-900 dark:bg-zinc-100" />
+      )}
+      <Icon size={16} />
+      {label}
+    </button>
   );
 }

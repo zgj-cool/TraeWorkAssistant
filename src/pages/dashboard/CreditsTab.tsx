@@ -6,7 +6,7 @@ import ActivityHeatmap from '../../components/charts/ActivityHeatmap';
 import ModelTrendChart from '../../components/charts/ModelTrendChart';
 import { Badge, EmptyState, StatCard } from '../../components/ui';
 import { useDateRange } from '../../hooks/useDateRange';
-import { useIsDark } from '../../lib/useIsDark';
+import { axisPropsOf, useChartTheme } from '../../lib/chartTheme';
 import { fmtCredits } from '../../lib/format';
 import type {
   CreditsDailySnapshot,
@@ -46,16 +46,6 @@ import { buildModelTrend } from './modelTrend';
  * Qoder 池（90 天，积分测量口径——网关从上游 usage.credits 提取实测值，issue #82 T2，仅覆盖走网关流量）。
  */
 
-const tooltipStyle = (isDark: boolean) => ({
-  fontSize: 12,
-  borderRadius: 10,
-  border: `1px solid ${isDark ? '#3f3f46' : '#e2e8f0'}`,
-  background: isDark ? '#18181b' : '#fff',
-  color: isDark ? '#e4e4e7' : '#1e293b',
-  boxShadow: '0 6px 16px rgba(0,0,0,0.1)',
-  padding: '8px 12px',
-} as const);
-
 export default function CreditsTab({
   scope,
   source,
@@ -94,7 +84,7 @@ export default function CreditsTab({
   /** 分组∩账号筛选生效 uid 集（null = 不限；issue #82 问题4-1：获得积分 KPI 跟随筛选） */
   uidSet: Set<string> | null;
 }) {
-  const isDark = useIsDark();
+  const chart = useChartTheme();
   // 统计周期默认「今日」（用户习惯先看当日消耗；需要跨日再手动切 7/30 天）
   const { range, setRange, startStr, todayStr, dateList } = useDateRange('today');
   const [modelFilter, setModelFilter] = useState('');
@@ -334,11 +324,7 @@ export default function CreditsTab({
   // 源可用性（§8 诚实空态兜底；源禁用说明在页面第二层分类的切换控件上）
   const localUnavailable = source === 'local' && !buddyActive && !qoderActive;
 
-  const axisProps = {
-    tick: { fontSize: 11, fill: isDark ? '#a1a1aa' : '#94a3b8' },
-    axisLine: { stroke: isDark ? '#3f3f46' : '#e2e8f0' },
-    tickLine: false,
-  } as const;
+  const axisProps = axisPropsOf(chart);
 
   return (
     <div className="card p-5">
@@ -478,15 +464,21 @@ export default function CreditsTab({
           <div className="mt-5">
             <div className="mb-2 flex items-center gap-3">
               <h4 className="text-sm font-medium">{isGateway && !isGatewayCredits ? '请求趋势图' : '积分趋势图'}</h4>
-              <div className="flex items-center gap-3 text-xs text-slate-400">
-                <span className="flex items-center gap-1">
-                  <span className="inline-block h-2 w-2 rounded-full" style={{ background: '#f59e0b' }} />
+              <div className="flex items-center gap-3 text-[12px] text-slate-500 dark:text-zinc-400">
+                <span className="flex items-center gap-1.5">
+                  <span
+                    className="inline-block h-2 w-2 rounded-full"
+                    style={{ background: chart.accent }}
+                  />
                   {consumeLabel}
                   {modelFilter ? `（${modelFilter}）` : ''}
                 </span>
                 {!isGateway && (
-                  <span className="flex items-center gap-1">
-                    <span className="inline-block h-2 w-2 rounded-full" style={{ background: '#22c55e' }} />
+                  <span className="flex items-center gap-1.5">
+                    <span
+                      className="inline-block h-2 w-2 rounded-full"
+                      style={{ background: chart.accentSoft }}
+                    />
                     获得积分
                   </span>
                 )}
@@ -510,21 +502,21 @@ export default function CreditsTab({
               <div className="h-56">
                 <ResponsiveContainer>
                   <ComposedChart data={trend} margin={{ top: 12, right: 16, left: 0, bottom: 4 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke={isDark ? '#3f3f46' : '#e2e8f0'} opacity={0.25} vertical={false} />
+                    <CartesianGrid strokeDasharray="3 3" stroke={chart.grid} opacity={0.25} vertical={false} />
                     <XAxis dataKey="label" {...axisProps} minTickGap={24} />
                     <YAxis {...axisProps} axisLine={false} width={56} />
                     <Tooltip
-                      cursor={{ stroke: isDark ? '#52525b' : '#cbd5e1', strokeWidth: 1, strokeDasharray: '3 3' }}
-                      contentStyle={tooltipStyle(isDark)}
+                      cursor={{ stroke: chart.cursor, strokeWidth: 1, strokeDasharray: '3 3' }}
+                      contentStyle={chart.tooltip}
                       formatter={(v: number, name: string) => [isGateway && !isGatewayCredits ? String(v) : fmtCredits(v), name]}
                     />
                     <Line
                       type="monotone"
                       dataKey="consumed"
                       name={consumeLabel}
-                      stroke="#f59e0b"
+                      stroke={chart.accent}
                       strokeWidth={2}
-                      dot={showDots ? { r: 3, fill: '#f59e0b', strokeWidth: 0 } : false}
+                      dot={showDots ? { r: 3, fill: chart.accent, strokeWidth: 0 } : false}
                       activeDot={{ r: 5 }}
                       connectNulls
                     />
@@ -533,9 +525,9 @@ export default function CreditsTab({
                         type="monotone"
                         dataKey="earned"
                         name="获得积分"
-                        stroke="#22c55e"
+                        stroke={chart.accentSoft}
                         strokeWidth={2}
-                        dot={showDots ? { r: 3, fill: '#22c55e', strokeWidth: 0 } : false}
+                        dot={showDots ? { r: 3, fill: chart.accentSoft, strokeWidth: 0 } : false}
                         activeDot={{ r: 5 }}
                         connectNulls
                       />

@@ -1,5 +1,6 @@
 import { type ReactNode } from 'react';
 import { RANGES, type RangeKey } from '../hooks/useDateRange';
+import { SegmentedTabs } from './ui';
 
 /** 数据源口径（credits-dashboard-plan.md §3.4）：本地 / API 网关 / 官网。
  *  源切换控件由页面级第二层分类承载（不在业务面板内），此处仅提供类型与标签。 */
@@ -47,15 +48,17 @@ export default function ChartFilterBar({
     <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
       <div className="flex flex-wrap items-center gap-2">
         {icon}
-        <h3 className="font-medium">{title}</h3>
-        <span className="text-xs text-slate-400">
+        <h3 className="text-[14px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">
+          {title}
+        </h3>
+        <span className="text-[12px] text-slate-500 dark:text-zinc-400">
           会话总数：{sessions != null ? sessions.toLocaleString() : '—'}
         </span>
         {badges}
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <select
-          className="input !w-auto !py-1 text-xs"
+          className="input !w-auto !py-1.5 !text-[12px]"
           value={modelFilter}
           onChange={(e) => onModelFilter(e.target.value)}
           title="筛选趋势与消耗合计的模型"
@@ -67,21 +70,11 @@ export default function ChartFilterBar({
             </option>
           ))}
         </select>
-        <div className="flex items-center gap-1">
-          {RANGES.map((r) => (
-            <button
-              key={r.key}
-              onClick={() => onRange(r.key)}
-              className={`chip border ${
-                range === r.key
-                  ? 'border-brand-500 text-brand-600 dark:text-brand-400'
-                  : 'border-slate-200 text-slate-500 dark:border-zinc-700 dark:text-zinc-400'
-              }`}
-            >
-              {r.label}
-            </button>
-          ))}
-        </div>
+        <SegmentedTabs
+          value={range}
+          onChange={(k) => onRange(k as RangeKey)}
+          options={RANGES.map((r) => ({ key: r.key, label: r.label }))}
+        />
         {extra}
       </div>
     </div>

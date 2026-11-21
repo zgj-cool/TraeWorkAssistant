@@ -16,7 +16,7 @@ import ActivityHeatmap from '../../components/charts/ActivityHeatmap';
 import ModelTrendChart from '../../components/charts/ModelTrendChart';
 import { Badge, EmptyState, StatCard } from '../../components/ui';
 import { useDateRange } from '../../hooks/useDateRange';
-import { useIsDark } from '../../lib/useIsDark';
+import { axisPropsOf, useChartTheme } from '../../lib/chartTheme';
 import type { UsageDayView, UsageHistoryResult, WbTokenStats } from '../../types';
 import type { PlatformScope } from './KpiRow';
 import { buildModelTrend } from './modelTrend';
@@ -39,14 +39,6 @@ import { buildModelTrend } from './modelTrend';
  * cache_read 正常计费），网关转发口径单请求无法恢复真实缓存值（不伪造，出站保持 0）。
  * Trae 平台网关源并列展示官网账单口径 cache_read 作对账参照（数据独立不混合）。
  */
-
-const STACK_COLORS: Record<string, string> = {
-  cache_read: '#6366f1',
-  new_input: '#38bdf8',
-  output: '#22c55e',
-  cache_write: '#f59e0b',
-  input: '#38bdf8',
-};
 
 const SEG_LABELS: Record<string, string> = {
   cache_read: '缓存读取',
@@ -95,7 +87,7 @@ export default function TokensTab({
   /** API 网关 Trae/Buddy/Qoder 池用量（90 天） */
   gateway: GatewayDays | null;
 }) {
-  const isDark = useIsDark();
+  const chart = useChartTheme();
   // 统计周期默认「今日」（与积分统计 Tab 一致）
   const { range, setRange, startStr, todayStr, dateList } = useDateRange('today');
   const [modelFilter, setModelFilter] = useState('');
@@ -315,20 +307,17 @@ export default function TokensTab({
           ? '网关 90 天'
           : 'Trae 365 天 · Buddy 无接口';
 
-  const tooltipStyle = {
-    fontSize: 12,
-    borderRadius: 10,
-    border: `1px solid ${isDark ? '#3f3f46' : '#e2e8f0'}`,
-    background: isDark ? '#18181b' : '#fff',
-    color: isDark ? '#e4e4e7' : '#1e293b',
-    boxShadow: '0 6px 16px rgba(0,0,0,0.1)',
-    padding: '8px 12px',
-  } as const;
-  const axisProps = {
-    tick: { fontSize: 11, fill: isDark ? '#a1a1aa' : '#94a3b8' },
-    axisLine: { stroke: isDark ? '#3f3f46' : '#e2e8f0' },
-    tickLine: false,
-  } as const;
+  // Token 分项用中性墨阶（缓存写/读 → 新输入 → 输出逐级加深），保持「单强调色」基调；
+  // 「调用次数」虚线用强调色，避免再引入第四种色相。
+  const stackColors: Record<string, string> = {
+    cache_write: chart.stack.cache_write,
+    cache_read: chart.stack.cache_read,
+    new_input: chart.stack.new_input,
+    input: chart.stack.new_input,
+    output: chart.stack.output,
+  };
+  const tooltipStyle = chart.tooltip;
+  const axisProps = axisPropsOf(chart);
 
   // Qoder 官网无 token 接口、本地日志 token 恒为 0；唯一可用数据源是 API 网关 Qoder 池
   //（issue #82 T2.4：网关从上游 usage 落库 prompt/completion tokens），网关源正常渲染
@@ -456,7 +445,7 @@ export default function TokensTab({
               <div className="h-64">
                 <ResponsiveContainer>
                   <ComposedChart data={trend} margin={{ top: 12, right: 8, left: 0, bottom: 4 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke={isDark ? '#3f3f46' : '#e2e8f0'} opacity={0.25} vertical={false} />
+                    <CartesianGrid strokeDasharray="3 3" stroke={chart.grid} opacity={0.25} vertical={false} />
                     <XAxis dataKey="label" {...axisProps} minTickGap={24} />
                     <YAxis yAxisId="tokens" {...axisProps} axisLine={false} width={56} tickFormatter={(v: number) => fmtTokens(v)} />
                     <YAxis yAxisId="calls" orientation="right" {...axisProps} axisLine={false} width={40} />
@@ -475,11 +464,11 @@ export default function TokensTab({
                         dataKey={k}
                         stackId="t"
                         name={SEG_LABELS[k]}
-                        fill={STACK_COLORS[k]}
+                        fill={stackColors[k]}
                         maxBarSize={22}
                       />
                     ))}
-                    <Line yAxisId="calls" type="monotone" dataKey="calls" name="调用次数" stroke="#f43f5e" strokeWidth={1.5} strokeDasharray="5 3" dot={false} />
+                    <Line yAxisId="calls" type="monotone" dataKey="calls" name="调用次数" stroke={chart.accent} strokeWidth={1.5} strokeDasharray="5 3" dot={false} />
                   </ComposedChart>
                 </ResponsiveContainer>
               </div>

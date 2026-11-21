@@ -1059,7 +1059,7 @@ export default function ApiKeysManager({
       >
         <div className="text-sm">
           确认删除 Key「{deleteForKey?.name}」？
-          <div className="mt-1 text-xs text-slate-400">使用该 Key 的客户端将立即无法访问（401）。</div>
+          <div className="mt-1.5 text-[11.5px] leading-relaxed text-slate-500 dark:text-zinc-400">使用该 Key 的客户端将立即无法访问（401）。</div>
         </div>
       </Modal>
 

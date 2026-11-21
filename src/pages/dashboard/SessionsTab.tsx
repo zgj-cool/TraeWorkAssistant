@@ -196,10 +196,10 @@ export default function SessionsTab({
           }}
           className="input !py-1.5 !text-xs w-36"
         />
-        <button className="chip border" onClick={() => setRange(6)}>
+        <button className="btn-outline !px-2 !py-1 !text-[12px]" onClick={() => setRange(6)}>
           近 7 天
         </button>
-        <button className="chip border" onClick={() => setRange(29)}>
+        <button className="btn-outline !px-2 !py-1 !text-[12px]" onClick={() => setRange(29)}>
           近 30 天
         </button>
         <select
@@ -256,7 +256,7 @@ export default function SessionsTab({
       ) : (
         <div className="card overflow-hidden">
           <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3 dark:border-zinc-800">
-            <h3 className="font-medium">会话明细</h3>
+            <h3 className="text-[14px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">会话明细</h3>
             <span className="text-xs text-slate-400">
               {data
                 ? `共 ${data.total.toLocaleString()} 条会话 · 区间合计 ${fmtCredits(data.credits_total)} 积分`
@@ -265,7 +265,7 @@ export default function SessionsTab({
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
-              <thead className="bg-slate-50 text-xs uppercase text-slate-500 dark:bg-zinc-900">
+              <thead className="border-b border-slate-200/70 bg-slate-50/70 text-[11.5px] font-medium tracking-[0.01em] text-slate-500 dark:border-zinc-800/70 dark:bg-zinc-900/40 dark:text-zinc-400">
                 <tr>
                   {scope === 'qoder' && <th className="w-8" />}
                   <th className="px-4 py-2 text-left">时间</th>
@@ -393,7 +393,7 @@ function RowWithDetail({
   const span = 5 + (richColumns ? 1 : 0) + (showCacheCost ? 2 : 0) + (expandable ? 1 : 0);
   return (
     <>
-      <tr className="row-hover border-t border-slate-200 dark:border-zinc-800">
+      <tr className="row-hover border-t border-slate-200/70 dark:border-zinc-800">
         {expandable && (
           <td className="px-2 py-2 text-center">
             <button

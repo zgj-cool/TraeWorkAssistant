@@ -48,6 +48,174 @@ pub struct MainWindowMaximized {
     pub outer_size: std::sync::atomic::AtomicU64,
 }
 
+/// 主窗口「首帧就绪」闸门（冷启动防白闪）：
+/// 建窗阶段绝不调用 `maximized`/`show`，等前端把首屏骨架真正画到屏幕上后调用
+/// `main_window_ready` 命令，才最大化 + 显示——用户看到的第一帧就是启动页内容。
+pub struct MainWindowReveal {
+    /// 是否已经显示过（一次性闸门，多路径触发只生效第一次）
+    pub shown: std::sync::atomic::AtomicBool,
+    /// 启动即最小化到托盘：保持隐藏，由托盘图标显示
+    pub minimized: std::sync::atomic::AtomicBool,
+    /// 「逻辑最大化」：启动时窗口直接以工作区尺寸建出、未调用 Win32 maximize，
+    /// 故 `is_maximized()` 为假。标题栏图标与托盘恢复逻辑需要真实语义，
+    /// 这里显式记一份——由前端 `maximize` 类操作与还原操作同步（见 window_state 命令）。
+    pub logically_maximized: std::sync::atomic::AtomicBool,
+}
+
+/// 关闭本窗口的 DWM 过渡动画（`DWMWA_TRANSITIONS_FORCEDISABLED`）。
+///
+/// 这是冷启动「尺寸跳变一闪」的根因：窗口建出来是 1180×760，调用 `maximize()`
+/// 时 Windows 会对「还原 → 最大化」的尺寸变化播放一段 DWM 过渡动画（约 200ms 的
+/// 从小到大扩张），期间窗口内容被重采样/清屏，肉眼就是一次闪动。
+/// 禁用过渡后最大化瞬时生效，用户直接看到最大化的完整启动页。
+/// 必须在 `maximize()` **之前**调用，且只对本进程主窗口生效（不影响其它程序）。
+#[cfg(target_os = "windows")]
+fn disable_window_transitions(window: &tauri::WebviewWindow) {
+    use windows_sys::Win32::Graphics::Dwm::{
+        DwmSetWindowAttribute, DWMWA_TRANSITIONS_FORCEDISABLED,
+    };
+    let Ok(hwnd) = window.hwnd() else {
+        return;
+    };
+    // tauri 的 HWND 来自 windows crate（isize 新类型）；windows-sys 的 HWND 是
+    // `*mut c_void` 类型别名，直接转裸指针传入即可。
+    let hwnd = hwnd.0 as *mut core::ffi::c_void;
+    let disabled: i32 = 1;
+    // SAFETY: hwnd 来自 Tauri 的有效窗口句柄；属性值是指向 i32 的有效指针，
+    // 长度与实际类型（BOOL）一致。失败仅意味着过渡未被禁用，不影响功能。
+    unsafe {
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_TRANSITIONS_FORCEDISABLED as u32,
+            &disabled as *const i32 as *const core::ffi::c_void,
+            std::mem::size_of::<i32>() as u32,
+        );
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn disable_window_transitions(_window: &tauri::WebviewWindow) {}
+
+/// 把窗口直接调整到「主显示器工作区」大小并贴到工作区左上角（物理像素）。
+///
+/// 冷启动「尺寸跳变闪一下」的真正机制：窗口先以 1180×760 建出来，WebView2 在这个
+/// 尺寸下完成首次布局与光栅化；随后 `maximize()` 把它放大到工作区 —— 放大瞬间
+/// 新增区域还没有内容，合成器先清一遍底再重绘，肉眼就是「从小尺寸撑到全屏时闪一下」。
+/// 只禁 DWM 过渡动画消不掉这一帧重绘（动画只是被跳过了，重绘依然发生）。
+///
+/// 因此这里在**页面加载前**（窗口仍隐藏）就把几何设成最终工作区尺寸：页面从头到尾
+/// 只在最终尺寸下渲染一次，后面的 `maximize()` 因为尺寸已经等于工作区而不产生任何
+/// 尺寸变化，也就没有多余的重绘。
+///
+/// 失败时保持构建尺寸（不影响可用性，只是可能仍有一次极短重绘）。
+fn size_to_work_area(window: &tauri::WebviewWindow) {
+    // 优先当前窗口所在显示器，取不到退回主显示器（冷启动时窗口通常在主屏）
+    let monitor = window
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| window.primary_monitor().ok().flatten());
+    let Some(monitor) = monitor else {
+        return;
+    };
+    let wa = monitor.work_area();
+    let (x, y) = (wa.position.x, wa.position.y);
+    let (w, h) = (wa.size.width, wa.size.height);
+    if w == 0 || h == 0 {
+        return;
+    }
+    let _ = window.set_size(tauri::PhysicalSize::new(w, h));
+    let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+}
+
+/// 窗口是否已经铺满所在显示器的工作区（尺寸容差 8px，吸收 DPI 取整差异）。
+/// 为真时无需再 `maximize()`，避免无谓的 WM_SIZE 重排。
+fn window_fills_work_area(window: &tauri::WebviewWindow) -> bool {
+    let (Ok(size), Ok(pos)) = (window.outer_size(), window.outer_position()) else {
+        return false;
+    };
+    let monitor = window
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| window.primary_monitor().ok().flatten());
+    let Some(monitor) = monitor else {
+        return false;
+    };
+    let wa = monitor.work_area();
+    let tol = MAXIMIZED_SIZE_TOLERANCE_PX;
+    size.width.abs_diff(wa.size.width) <= tol
+        && size.height.abs_diff(wa.size.height) <= tol
+        && pos.x.abs_diff(wa.position.x) <= tol
+        && pos.y.abs_diff(wa.position.y) <= tol
+}
+
+/// 一次性显示主窗口（最大化 + 聚焦）。返回是否本次真正执行了显示。
+fn reveal_main_window(app: &tauri::AppHandle) -> bool {
+    let Some(gate) = app.try_state::<MainWindowReveal>() else {
+        return false;
+    };
+    if gate.minimized.load(std::sync::atomic::Ordering::SeqCst) {
+        return false;
+    }
+    // swap 保证只显示一次（前端握手与兜底超时可能同时到）
+    if gate.shown.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return false;
+    }
+    let Some(window) = app.get_webview_window("main") else {
+        return false;
+    };
+    // 关键顺序：① 再确认禁用 DWM 过渡（兜底/握手两条路径都会走到这里）；
+    // ② 若几何还不是工作区尺寸（显示器在启动后才接上等），先补一次；
+    // ③ 尺寸已等于工作区时**不再调 maximize()** —— 那会在同尺寸上再触发一次
+    //    WM_SIZE/重排，正是「最后一跳」的来源；只有尺寸确实不同才最大化；
+    // ④ 最后显示。
+    disable_window_transitions(&window);
+    size_to_work_area(&window);
+    let fills = window_fills_work_area(&window);
+    if !fills {
+        let _ = window.maximize();
+    }
+    // 记录「逻辑最大化」：尺寸已铺满工作区但未走 Win32 maximize 时，前端
+    // `isMaximized()` 会返回 false（标题栏图标错误、首次点击无效）。
+    // 前端 TitleBar 经 `window_logically_maximized` 命令读取该标记来修正图标；
+    // 用户手动还原/最大化时由 `window_logical_zoom_set` 同步，二者共同维护。
+    if let Some(gate) = app.try_state::<MainWindowReveal>() {
+        gate.logically_maximized
+            .store(fills, std::sync::atomic::Ordering::SeqCst);
+    }
+    if !window.is_visible().unwrap_or(false) {
+        let _ = window.show();
+    }
+    let _ = window.set_focus();
+    true
+}
+
+/// 查询「逻辑最大化」标记：启动时直接以工作区尺寸建窗，未走 Win32 maximize，
+/// 前端据此修正标题栏图标与首次点击行为。
+#[tauri::command]
+fn window_logically_maximized(app: tauri::AppHandle) -> bool {
+    app.try_state::<MainWindowReveal>()
+        .map(|g| g.logically_maximized.load(std::sync::atomic::Ordering::SeqCst))
+        .unwrap_or(false)
+}
+
+/// 前端还原/最大化后同步「逻辑最大化」标记（含手动拖动改变尺寸的情形）。
+#[tauri::command]
+fn window_logical_zoom_set(app: tauri::AppHandle, maximized: bool) {
+    if let Some(gate) = app.try_state::<MainWindowReveal>() {
+        gate.logically_maximized
+            .store(maximized, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// 前端首帧就绪回调：`main.tsx` 在启动页骨架绘制完成后 invoke。
+/// 语义 = 「现在显示窗口，用户看到的就是这一帧」。
+#[tauri::command]
+fn main_window_ready(app: tauri::AppHandle) -> bool {
+    reveal_main_window(&app)
+}
+
 /// 外框尺寸比对容差（物理像素）：同一个最大化窗口隐藏前后只可能有 DPI 取整级差异
 const MAXIMIZED_SIZE_TOLERANCE_PX: u32 = 8;
 
@@ -284,6 +452,47 @@ fn show_main_window(app: &tauri::AppHandle) {
     }
 }
 
+/// 启动页底色判定：与前端 `lib/themes.ts::resolveTheme` 口径保持一致
+/// （具体主题按自身明暗；`light`/`dark` 兼容旧值；`system`/空 → 跟随系统；
+///  其余未知非空值在前端回退默认主题「炭黑」= 深色）。
+fn splash_prefers_dark(theme: &str) -> bool {
+    match theme.trim() {
+        "graphite" | "light" => false,
+        "charcoal" | "dark" | "violet-night" | "ink-green" | "amber-night" | "tech-blue" => true,
+        "" | "system" => system_prefers_dark(),
+        _ => true,
+    }
+}
+
+/// 系统是否偏好深色（Windows：`AppsUseLightTheme` DWORD，0=深色）。
+/// 读不到时按浅色（Windows 默认）——仅影响首帧背景色，不影响主题本身。
+#[cfg(target_os = "windows")]
+fn system_prefers_dark() -> bool {
+    use windows_registry::CURRENT_USER;
+    CURRENT_USER
+        .open(r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize")
+        .ok()
+        .and_then(|k| k.get_u32("AppsUseLightTheme").ok())
+        .map(|light| light == 0)
+        .unwrap_or(false)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn system_prefers_dark() -> bool {
+    true
+}
+
+/// 启动页底色（窗口层 + WebView 层共用）：浅色 `slate-50` / 深色 `zinc-950`。
+/// 必须与 `index.html` 内联骨架的 `--bs-page`（`#f8fafc` / `#09090b`）保持一致，
+/// 否则「空白窗口 → 启动页」之间会出现一次跳色。
+fn splash_background(theme: &str) -> tauri::window::Color {
+    if splash_prefers_dark(theme) {
+        tauri::window::Color(9, 9, 11, 255)
+    } else {
+        tauri::window::Color(248, 250, 252, 255)
+    }
+}
+
 fn main() {
     // 品牌迁移（老版本 Trae Work Assistant → AI Work 助手）：
     // 必须在 AppState::new 创建新数据目录之前执行；迁移为「复制」语义，
@@ -363,6 +572,11 @@ fn main() {
         .manage(MainWindowMaximized {
             maximized: std::sync::atomic::AtomicBool::new(false),
             outer_size: std::sync::atomic::AtomicU64::new(0),
+        })
+        .manage(MainWindowReveal {
+            shown: std::sync::atomic::AtomicBool::new(false),
+            minimized: std::sync::atomic::AtomicBool::new(false),
+            logically_maximized: std::sync::atomic::AtomicBool::new(false),
         })
         .manage(Mutex::new(Option::<commands::api_server::ApiServerRuntime>::None))
         .manage(commands::checkin::CheckinGuard(tokio::sync::Mutex::new(())))
@@ -668,6 +882,9 @@ fn main() {
             commands::qoder::qoder_env_reset_items,
             commands::qoder::qoder_env_reset,
             tasks::scheduler::scheduler_status,
+            main_window_ready,
+            window_logically_maximized,
+            window_logical_zoom_set,
         ])
         .setup(|app| {
             let state = app.state::<AppState>();
@@ -690,6 +907,121 @@ fn main() {
             }
 
             let settings = state.settings();
+
+            // 主窗口改为「在 setup 内动态创建」（tauri.conf.json 的 windows 置空）：
+            // 只有建窗那一刻就把启动页底色交给 WebView2（builder.background_color →
+            // DefaultBackgroundColor），才能保证窗口出现的第一帧即是正确底色。
+            // 早期实现（配置建窗 + setup 里 set_background_color）实测仍会闪一下白：
+            // WebView2 在建窗瞬间已按默认白底出过帧，后改色追不上；隐藏窗口再 show 也会
+            // 因「不可见时不产帧」而在显示瞬间露出白帧。
+            {
+                let dark = splash_prefers_dark(&settings.theme);
+                let color = splash_background(&settings.theme);
+                let minimized = settings.launch_minimized;
+                // 启动即最小化：闸门标记为「不再自动显示」，窗口由托盘图标唤起
+                if minimized {
+                    if let Some(gate) = app.try_state::<MainWindowReveal>() {
+                        gate.minimized
+                            .store(true, std::sync::atomic::Ordering::SeqCst);
+                    }
+                }
+                // 首帧明暗标记：必须在「页面开始解析前」写入 html，否则骨架会先按系统
+                // prefers-color-scheme 画一帧再跳色。这里用初始化脚本（WebView2 的
+                // AddScriptToExecuteOnDocumentCreated：文档创建即执行，不产生网络请求、
+                // 也不受页面 CSP 限制）。
+                // 反例（勿改回）：曾用 <script src="/boot-theme.js"> 读 localStorage——
+                // 同步阻塞脚本排在 <style> 之前，冷启动时要等它取回来才开始解析样式，
+                // 中间那一帧无样式 = 纯白底，正是「闪一下白」的来源。
+                // 注意 Chromium 的解析时机不确定性：注入脚本可能在 <html> 尚未创建时就执行，
+                // 故除立即尝试外，再用 rAF 补几次 + DOMContentLoaded 兜底（同一函数幂等）。
+                // 第二段职责：**首帧握手**——骨架的样式与内容都进了合成器后，
+                // 通知 Rust 显示窗口（调 main_window_ready 命令）。
+                // 放在注入脚本里而不是 React 里：1.6MB bundle 的解析要几百毫秒，
+                // 等它反而让「窗口迟迟不出现」；骨架是纯 CSS，第一帧就能画完。
+                // `__TAURI_INTERNALS__` 由 Tauri 自己的 bootstrap 脚本注入，两段脚本
+                // 的先后顺序不保证，故握手函数带存在性检查 + rAF 轮询重试（约 2s 上限）。
+                // 另外必须先确认骨架 DOM（#boot-splash）已解析出来：否则窗口显示时页面
+                // 还是空白底——深色主题下就是「先黑一下再出现启动页」。
+                let boot_js = format!(
+                    "(function(){{var d={};var n=0;function a(){{var r=document.documentElement;\
+if(!r)return false;r.setAttribute('data-boot-theme',d?'dark':'light');\
+if(d)r.classList.add('dark');else r.classList.remove('dark');return true;}}\
+if(!a()){{var f=function(){{if(a()||++n>120)return;requestAnimationFrame(f);}};requestAnimationFrame(f);}}\
+var k=0,m=0;function ready(){{var el=document.getElementById('boot-splash');\
+if(!el||!el.firstElementChild){{if(++m>120)return;requestAnimationFrame(ready);return;}}\
+var i=window.__TAURI_INTERNALS__;\
+if(!i||!i.invoke){{if(++k>120)return;requestAnimationFrame(ready);return;}}\
+try{{i.invoke('main_window_ready');}}catch(e){{}}}}\
+requestAnimationFrame(function(){{requestAnimationFrame(ready);}});\
+document.addEventListener('DOMContentLoaded',a,{{once:true}});}})();",
+                    if dark { "true" } else { "false" }
+                );
+                let built = tauri::WebviewWindowBuilder::new(
+                    app,
+                    "main",
+                    tauri::WebviewUrl::App("index.html".into()),
+                )
+                .title("AI Work 助手")
+                .inner_size(1180.0, 760.0)
+                .min_inner_size(960.0, 600.0)
+                .decorations(false)
+                .resizable(true)
+                .center()
+                // 建窗阶段绝不传 maximized(true)：tao 的处理顺序是
+                // 「set_maximized(true)（内部 ShowWindow，窗口立刻可见）→ set_visible(false)」，
+                // 中间那一瞬窗口已经露过脸，是「透白窗口一闪而过」的直接来源。
+                // 最大化改到 reveal_main_window 里、与 show 一起做。
+                .maximized(false)
+                // 窗口明暗与「应用主题」对齐：WebView2 的 prefers-color-scheme 随之改变，
+                // 于是即使注入脚本尚未生效，index.html 里 @media (prefers-color-scheme)
+                // 那一档也已选出正确底色（双保险，避免深色主题下先刷一帧浅色）。
+                .theme(Some(if dark {
+                    tauri::Theme::Dark
+                } else {
+                    tauri::Theme::Light
+                }))
+                // 关键：先建隐藏窗口。配置建窗 + 立即显示时，WebView2 在首帧 HTML
+                // 绘制前会先呈现自己的默认底色（系统白），表现为「透白窗口一闪」；
+                // 先隐藏可彻底避免这一帧被看到。
+                .visible(false)
+                // 隐藏期间禁用渲染节流：否则 WebView 被判定为不可见而不产帧，
+                // 等 show 的瞬间又回到「先白一帧」的老问题。
+                .background_throttling(tauri::utils::config::BackgroundThrottlingPolicy::Disabled)
+                .background_color(color)
+                .initialization_script(boot_js)
+                .build();
+                if let Err(e) = built {
+                    fs_utils::app_log(&state.data_dir, &format!("主窗口创建失败: {e}"));
+                    return Err(e.into());
+                }
+                if let Some(window) = app.get_webview_window("main") {
+                    // 建窗即禁用 DWM 过渡：本窗口后续任何「最大化 / 还原」都不再播放大
+                    // 尺寸动画（冷启动首帧与托盘唤起共用同一 HWND，属性常驻）。
+                    disable_window_transitions(&window);
+                    // 关键：在建窗后、页面加载前就把几何拉到最终工作区尺寸。
+                    // 页面从头到尾只在「最终尺寸」下渲染一次，后续 maximize() 因尺寸已
+                    // 相等而不产生尺寸变化 —— 这是唯一能彻底消除「默认尺寸 → 全屏」重绘闪
+                    // 的做法（只禁 DWM 动画不够：动画被跳过，重绘仍在）。
+                    // launch_minimized 时同样处理：托盘唤起时尺寸已就绪，不会二次跳变。
+                    size_to_work_area(&window);
+                }
+                // 兜底：前端握手未到达（JS 报错/资源损坏）时不能永远不显示窗口，
+                // 2.5 秒后无条件显示——此时底色已是启动页色，最坏是空白启动页。
+                if !minimized {
+                    let handle = app.handle().clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_millis(2500));
+                        if reveal_main_window(&handle) {
+                            if let Some(st) = handle.try_state::<AppState>() {
+                                fs_utils::app_log(
+                                    &st.data_dir,
+                                    "显示主窗口：前端首帧握手未到达，已按兜底超时显示",
+                                );
+                            }
+                        }
+                    });
+                }
+            }
 
             // 启动期日志清理：按 log_retention_days 丢弃过期日志行（消费设置项，避免无限增长）
             let retention = settings.log_retention_days.max(0) as u64;
@@ -724,13 +1056,9 @@ fn main() {
                 ),
             );
 
-            // issue #46：配置已声明 maximized:true，此处程序化最大化做兜底——
-            // 若创建期最大化未生效或状态失同步，启动时强制重建一次
-            if let Some(window) = app.get_webview_window("main") {
-                if !window.is_maximized().unwrap_or(false) {
-                    let _ = window.maximize();
-                }
-            }
+            // 注意：这里不能再调 window.maximize() 兜底——tao 的 maximize 内部是
+            // ShowWindow(SW_MAXIMIZE)，会让隐藏窗口当场可见（正是透白一闪的来源）。
+            // 最大化与显示统一由 reveal_main_window（前端首帧握手 / 兜底超时）负责。
 
             // 创建系统托盘（始终启用，支持最小化到托盘；失败不阻断启动）
             {

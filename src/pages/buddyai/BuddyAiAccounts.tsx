@@ -748,7 +748,7 @@ export default function BuddyAiAccounts() {
         ) : (
           <>
           <table className="w-full min-w-[1080px] text-sm">
-            <thead className="bg-slate-50 text-xs uppercase text-slate-500 dark:bg-zinc-900">
+            <thead className="border-b border-slate-200/70 bg-slate-50/70 text-[11.5px] font-medium tracking-[0.01em] text-slate-500 dark:border-zinc-800/70 dark:bg-zinc-900/40 dark:text-zinc-400">
               <tr>
                 <th className="px-4 py-2 text-left">
                   <input
@@ -784,7 +784,7 @@ export default function BuddyAiAccounts() {
                   return min == null ? p.expire_secs : Math.min(min, p.expire_secs);
                 }, null);
                 return (
-                <tr key={a.id} className="row-hover border-t border-slate-200 dark:border-zinc-800">
+                <tr key={a.id} className="row-hover border-t border-slate-200/70 dark:border-zinc-800">
                   <td className="px-4 py-3">
                     <input type="checkbox" checked={selected.has(a.id)} onChange={() => toggleSelect(a.id)} />
                   </td>
@@ -985,7 +985,7 @@ export default function BuddyAiAccounts() {
         title="Buddy 国际版扫码登录"
         widthClass="max-w-md"
       >
-        <div className="space-y-3 text-sm">
+        <div className="space-y-3.5 text-sm">
           <div className="flex items-center gap-2">
             {oauthBusy ? <Loader2 size={15} className="animate-spin text-brand-500" /> : <Globe size={15} className="text-brand-500" />}
             <span className="font-medium">{oauthStage === 'done' ? '完成' : '进行中'}</span>
@@ -1024,7 +1024,7 @@ export default function BuddyAiAccounts() {
       {/* 编辑弹框 */}
       <Modal open={editTarget !== null} onClose={() => !editBusy && setEditTarget(null)} title="编辑账号" widthClass="max-w-sm">
         {editTarget ? (
-          <div className="space-y-3 text-sm">
+          <div className="space-y-3.5 text-sm">
             <div>
               <label className="label">昵称</label>
               <input className="input" value={editName} onChange={(e) => setEditName(e.target.value)} />
@@ -1047,7 +1047,7 @@ export default function BuddyAiAccounts() {
 
       {/* 导出弹框（P8：默认脱敏；凭证副本强确认） */}
       <Modal open={exportOpen} onClose={() => !exportBusy && setExportOpen(false)} title="导出 BuddyAI 账号池" widthClass="max-w-sm">
-        <div className="space-y-3 text-sm">
+        <div className="space-y-3.5 text-sm">
           <div>导出账号池为 JSON 文件，可用于备份或迁移到其他设备的 BuddyAI 应用。</div>
           <label className="flex items-start gap-2">
             <input
@@ -1115,7 +1115,7 @@ export default function BuddyAiAccounts() {
 
       {/* 审查修复（第5项）：AIWQENC1 加密导出文件需密码解密——导入密码弹框 */}
       <Modal open={importEnvelope !== null} onClose={() => !importBusy && setImportEnvelope(null)} title="导入加密账号文件" widthClass="max-w-sm">
-        <div className="space-y-3 text-sm">
+        <div className="space-y-3.5 text-sm">
           <div>该文件为加密导出（凭证已加密），请输入导出时设置的密码进行解密导入。</div>
           <div>
             <label className="label">导出密码</label>
@@ -1150,7 +1150,7 @@ export default function BuddyAiAccounts() {
       {/* 移除确认弹框（删除类操作二次确认） */}
       <Modal open={confirmTarget !== null} onClose={() => !confirmBusy && setConfirmTarget(null)} title="确认移除账号" widthClass="max-w-sm">
         {confirmTarget ? (
-          <div className="space-y-3 text-sm">
+          <div className="space-y-3.5 text-sm">
             <p>
               {confirmTarget.kind === 'remove-account' ? (
                 <>
@@ -1180,7 +1180,7 @@ export default function BuddyAiAccounts() {
       {/* 积分包明细弹窗（对齐国内积分包列内弹窗；数据源 get-user-resource 分包快照） */}
       <Modal open={pkgTarget !== null} onClose={() => setPkgTarget(null)} title={`积分包明细 · ${pkgTarget?.nickname || pkgTarget?.id || ''}`} widthClass="max-w-lg">
         {pkgTarget ? (
-          <div className="space-y-3 text-sm">
+          <div className="space-y-3.5 text-sm">
             {(pkgTarget.credits_packages?.length ?? 0) === 0 ? (
               <p className="py-4 text-center text-xs text-slate-400">无积分包数据，请先到「积分看板」同步。</p>
             ) : (
@@ -1339,7 +1339,7 @@ export default function BuddyAiAccounts() {
 
       {/* 扫描本机账号结果弹框（account-snapshot.json 识别 + 池内匹配；凭证在加密 vault 不可提取） */}
       <Modal open={scanOpen} onClose={() => setScanOpen(false)} title="扫描本机账号" widthClass="max-w-md">
-        <div className="space-y-3 text-sm">
+        <div className="space-y-3.5 text-sm">
           {!scanResult?.found ? (
             <div className="text-slate-500">{String(scanResult?.reason ?? '未找到本机登录账号。')}</div>
           ) : (
@@ -1379,7 +1379,7 @@ export default function BuddyAiAccounts() {
 
       {/* 环境重置弹框（白名单目录清理；勾选「我已确认」才可执行——删除类操作二次确认） */}
       <Modal open={resetOpen} onClose={() => !resetBusy && setResetOpen(false)} title="BuddyAI 环境重置" widthClass="max-w-lg">
-        <div className="space-y-3 text-sm">
+        <div className="space-y-3.5 text-sm">
           <div className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:bg-amber-500/10 dark:text-amber-300">
             将删除 WorkBuddy AI 国际客户端数据目录（~/.workbuddy-ai）下所选内容，
             操作不可恢复；建议先关闭客户端再执行。

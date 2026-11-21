@@ -281,12 +281,12 @@ export default function QoderSettings() {
           <div className="card p-4">
             <div className="mb-3 flex items-center gap-2">
               <SlidersHorizontal size={16} className="text-violet-500" />
-              <h2 className="font-medium">通用配置</h2>
+              <h2 className="text-[15px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">通用配置</h2>
               <span className="text-xs text-slate-400">路径与时刻随右上角「保存配置」生效</span>
             </div>
 
             {/* 应用环境（原「客户端路径」改名：自动检测预填 + 人工可改，随「保存配置」生效） */}
-            <h3 className="mb-2 font-medium">应用环境</h3>
+            <h3 className="mb-2 text-[14px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">应用环境</h3>
             <div className="space-y-3">
               <div className="rounded-lg border border-slate-100 p-3 dark:border-zinc-800">
                 <div className="mb-2 flex items-center justify-between font-medium text-slate-500">
@@ -326,8 +326,8 @@ export default function QoderSettings() {
               </div>
             </div>
             {/* 签到行为（并入通用配置卡内部分节） */}
-            <div className="my-4 border-t border-slate-100 dark:border-zinc-800" />
-            <h3 className="mb-2 font-medium">签到行为</h3>
+            <div className="my-4 border-t border-slate-200/60 dark:border-zinc-800/60" />
+            <h3 className="mb-2 text-[14px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">签到行为</h3>
             <div className="grid gap-3">
               <label
                 className={`flex items-start gap-2 rounded-lg border p-3 ${
@@ -367,16 +367,16 @@ export default function QoderSettings() {
         <div className="card p-4">
           <div className="mb-3 flex items-center gap-2">
             <ListChecks size={16} className="text-violet-500" />
-            <h2 className="font-medium">任务配置</h2>
+            <h2 className="text-[15px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">任务配置</h2>
             <span className="text-xs text-slate-400">应用内调度器 + Windows 计划任务双轨</span>
           </div>
 
           {/* Token 定时续期（qoder-refresh 内置调度任务，2026-10-02 从「无 UI 恒开」升级为可配置） */}
           <div className="flex items-center justify-between">
-            <h3 className="font-medium">Token 定时续期</h3>
+            <h3 className="text-[14px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">Token 定时续期</h3>
             <span className="text-xs text-slate-400">开关随右上角「保存配置」生效</span>
           </div>
-          <p className="mb-3 mt-1 text-xs text-slate-400">
+          <p className="mb-3 mt-1.5 text-[11.5px] leading-relaxed text-slate-500 dark:text-zinc-400">
             应用内调度器每 6 小时为全部含刷新凭证的账号自动续期登录凭证（如 JWT Token）；
             客户端令牌惰性窗 7 小时大于 6 小时调度间隔，过期前必被续上。关闭后凭证仅在
             实际使用（余额刷新 / 签到 / 网关调用）时惰性刷新。无账号时空转不计失败。
@@ -393,11 +393,11 @@ export default function QoderSettings() {
             <span className="text-xs text-slate-400">内置任务 · 每 6 小时 · 无需注册计划任务</span>
           </div>
 
-          <div className="my-4 border-t border-slate-100 dark:border-zinc-800" />
+          <div className="my-4 border-t border-slate-200/60 dark:border-zinc-800/60" />
 
           {/* 每日自动签到（对齐 Buddy「Windows 计划任务」盒子样式） */}
           <div className="rounded-lg border border-slate-100 p-3 dark:border-zinc-800">
-            <h3 className="mb-2 font-medium">每日自动签到</h3>
+            <h3 className="mb-2 text-[14px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">每日自动签到</h3>
             <div className="mb-2 text-xs text-slate-400">
               应用内调度器到点自动执行（默认 10:15，同时覆盖「0 点签到」与「10:00 登录奖励」双活动），
               应用启动时自动补跑当日已过时刻；下方 Windows 计划任务作为兜底，应用未启动时直接运行。
@@ -414,7 +414,7 @@ export default function QoderSettings() {
                   const n = Math.min(600, Math.max(0, Math.floor(Number(e.target.value))));
                   setCheckinGap(Number.isFinite(n) ? n : 3);
                 }}
-                className="input h-9 !w-20 text-sm"
+                className="input h-9 !w-28 text-sm"
               />
               <span className="text-xs text-slate-400">
                 秒（多账号串行签到的间隔，默认 3 秒防频控，0 = 关闭）
@@ -455,14 +455,14 @@ export default function QoderSettings() {
             </div>
           </div>
 
-          <div className="my-4 border-t border-slate-100 dark:border-zinc-800" />
+          <div className="my-4 border-t border-slate-200/60 dark:border-zinc-800/60" />
 
           {/* 积分数据同步（对齐 Buddy 设计）：四模式定时同步看板服务端数据 */}
           <div className="flex items-center justify-between">
-            <h3 className="font-medium">积分数据同步</h3>
+            <h3 className="text-[14px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">积分数据同步</h3>
             <span className="text-xs text-slate-400">模式与时刻随右上角「保存配置」生效</span>
           </div>
-          <p className="mb-3 mt-1 text-xs text-slate-400">
+          <p className="mb-3 mt-1.5 text-[11.5px] leading-relaxed text-slate-500 dark:text-zinc-400">
             应用运行期间按所选模式自动同步积分看板的服务端数据（每日拉取全部账号余额写入快照，积分看板趋势数据源）；
             无账号时静默跳过不计失败，失败 30 分钟后自动重试；应用关闭期间不执行。
           </p>
@@ -494,7 +494,7 @@ export default function QoderSettings() {
                     const n = Math.min(24, Math.max(1, Math.round(Number(creditsForm.hours) || 2)));
                     setCreditsForm({ ...creditsForm, hours: String(n) });
                   }}
-                  className="input h-9 !w-20 text-sm"
+                  className="input h-9 !w-28 text-sm"
                 />
                 <span className="text-xs text-slate-400">
                   小时（1-24）；距上次成功同步满 {creditsForm.hours || '2'} 小时自动执行一次
@@ -518,14 +518,14 @@ export default function QoderSettings() {
             )}
           </div>
 
-          <div className="my-4 border-t border-slate-100 dark:border-zinc-800" />
+          <div className="my-4 border-t border-slate-200/60 dark:border-zinc-800/60" />
 
           {/* 会话流水定时合并：每 6 小时把「当天之前」的请求级流水按会话合并为单行 */}
           <div className="flex items-center justify-between">
-            <h3 className="font-medium">会话流水定时合并</h3>
+            <h3 className="text-[14px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">会话流水定时合并</h3>
             <span className="text-xs text-slate-400">开关随右上角「保存配置」生效</span>
           </div>
-          <p className="mb-3 mt-1 text-xs text-slate-400">
+          <p className="mb-3 mt-1.5 text-[11.5px] leading-relaxed text-slate-500 dark:text-zinc-400">
             会话明细按请求级落库（一个会话会产生数十条请求记录）。应用内调度器每 6 小时将
             早于保留窗的流水按「日期 + 账号 + 会话说明」合并为单行（积分与 token 合计不变），
             压缩流水表体积；保留窗内保留请求级明细，看板展示由查询即时聚合，无需等待合并。
@@ -548,7 +548,7 @@ export default function QoderSettings() {
                 max={90}
                 value={compactDays}
                 onChange={(e) => setCompactDays(e.target.value)}
-                className="input h-9 !w-20 text-sm"
+                className="input h-9 !w-28 text-sm"
               />
               <span className="text-xs text-slate-400">
                 天（1-90）；近 {compactDays || '3'} 天保留请求级明细，更早的合并为会话行

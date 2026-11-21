@@ -972,7 +972,7 @@ export default function QoderAccounts() {
       ) : (
       <div className="mt-5 card overflow-x-auto">
         <table className="w-full min-w-[980px] text-sm">
-            <thead className="bg-slate-50 text-xs uppercase text-slate-500 dark:bg-zinc-900">
+            <thead className="border-b border-slate-200/70 bg-slate-50/70 text-[11.5px] font-medium tracking-[0.01em] text-slate-500 dark:border-zinc-800/70 dark:bg-zinc-900/40 dark:text-zinc-400">
                 <tr>
                   <th className="px-4 py-2 text-left">账号</th>
                   <th className="px-4 py-2 text-left">分组</th>
@@ -992,7 +992,7 @@ export default function QoderAccounts() {
                 </tr>
               ) : (
                 filtered.map((a) => (
-                  <tr key={a.id} className="row-hover border-t border-slate-200 dark:border-zinc-800">
+                  <tr key={a.id} className="row-hover border-t border-slate-200/70 dark:border-zinc-800">
                     <td className="px-4 py-3">
                       <div className="flex flex-wrap items-center gap-1.5">
                         <span className="font-medium">{a.nickname || a.id}</span>
@@ -1341,7 +1341,7 @@ export default function QoderAccounts() {
                     const a = accounts.find((x) => x.id === p.slot);
                     const label = a?.nickname || p.slot;
                     return (
-                      <tr key={p.slot} className="border-t border-slate-100 dark:border-zinc-800">
+                      <tr key={p.slot} className="border-t border-slate-200/60 dark:border-zinc-800/60">
                         <td className="px-3 py-1.5">
                           <div className="font-medium">
                             {label}
@@ -1425,7 +1425,7 @@ export default function QoderAccounts() {
           {confirmTarget?.kind === 'delete' && (
             <>
               确认删除账号「{confirmTarget.name || confirmTarget.slot}」的快照？
-              <div className="mt-1 text-xs text-slate-400">删除后需重新备份登录态才能再次恢复该快照。</div>
+              <div className="mt-1.5 text-[11.5px] leading-relaxed text-slate-500 dark:text-zinc-400">删除后需重新备份登录态才能再次恢复该快照。</div>
             </>
           )}
         </div>
@@ -1616,7 +1616,7 @@ export default function QoderAccounts() {
           </>
         }
       >
-        <div className="space-y-3 text-sm">
+        <div className="space-y-3.5 text-sm">
           <div className="flex items-start gap-2 rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-300">
             <ShieldAlert size={14} className="mt-0.5 shrink-0" />
             <span>

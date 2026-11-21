@@ -452,13 +452,13 @@ export default function Accounts() {
       <div className="mb-3 flex flex-wrap items-center gap-2 text-sm">
         <button
           onClick={() => setFilter('all')}
-          className={`chip border ${filter === 'all' ? 'border-brand-500 text-brand-600' : 'border-slate-300 text-slate-500'}`}
+          className={`chip border ${filter === 'all' ? 'border-transparent bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900' : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 dark:border-zinc-700 dark:bg-zinc-900/60 dark:text-zinc-300'}`}
         >
           全部 ({accounts.length})
         </button>
         <button
           onClick={() => setFilter('ungrouped')}
-          className={`chip border ${filter === 'ungrouped' ? 'border-brand-500 text-brand-600' : 'border-slate-300 text-slate-500'}`}
+          className={`chip border ${filter === 'ungrouped' ? 'border-transparent bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900' : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 dark:border-zinc-700 dark:bg-zinc-900/60 dark:text-zinc-300'}`}
         >
           未分组 ({accounts.filter((a) => !a.group_id).length})
         </button>
@@ -466,7 +466,7 @@ export default function Accounts() {
           <button
             key={g.id}
             onClick={() => setFilter(g.id)}
-            className={`chip border ${filter === g.id ? 'border-brand-500 text-brand-600' : 'border-slate-300 text-slate-500'}`}
+            className={`chip border ${filter === g.id ? 'border-transparent bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900' : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 dark:border-zinc-700 dark:bg-zinc-900/60 dark:text-zinc-300'}`}
             style={{ borderColor: filter === g.id ? g.color : undefined }}
           >
             <span className="inline-block h-2 w-2 rounded-full" style={{ background: g.color }} />
@@ -486,7 +486,7 @@ export default function Accounts() {
           </div>
         ) : (
           <table className="w-full text-sm">
-            <thead className="bg-slate-50 text-xs uppercase text-slate-500 dark:bg-zinc-900">
+            <thead className="border-b border-slate-200/70 bg-slate-50/70 text-[11.5px] font-medium tracking-[0.01em] text-slate-500 dark:border-zinc-800/70 dark:bg-zinc-900/40 dark:text-zinc-400">
               <tr>
                 <th className="px-4 py-2 text-left">账号</th>
                 <th className="px-4 py-2 text-left">分组</th>
@@ -504,7 +504,7 @@ export default function Accounts() {
             <tbody>
               {filtered.map((a) => {
                 return (
-                  <tr key={a.user_id} className="row-hover border-t border-slate-200 dark:border-zinc-800">
+                  <tr key={a.user_id} className="row-hover border-t border-slate-200/70 dark:border-zinc-800">
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1.5">
                         <span className="font-medium">{a.name}</span>
@@ -616,12 +616,15 @@ export default function Accounts() {
                       {a.credits != null ? a.credits.toLocaleString() : '-'}
                     </td>
                     <td className="px-4 py-3">
-                      <div className="flex justify-end gap-1">
+                      {/* 操作列密度：统一 28px 方形图标按钮，语义色只保留
+                          「绿=切换 / 琥珀=凭证风险 / 玫瑰=删除」三档，其余中性，
+                          避免整列五颜六色；主要操作与维护操作之间用发丝竖线分组 */}
+                      <div className="flex items-center justify-end gap-0.5">
                         <button
                           title={switchingTo ? (switchingTo === a.user_id ? '切换中…' : '正在切换其他账号') : '切换到此账号登录 Trae'}
                           onClick={() => void switchTo(a.user_id, 'Trae')}
                           disabled={busy}
-                          className={`btn-ghost !p-2 ${switchingTo === a.user_id ? 'text-amber-500' : 'text-emerald-600 dark:text-emerald-400'} ${(switchingTo && switchingTo !== a.user_id) || savingLogin ? 'opacity-40 cursor-not-allowed' : ''}`}
+                          className={`btn-ghost !h-7 !w-7 shrink-0 !p-0 ${switchingTo === a.user_id ? 'text-amber-500' : 'text-emerald-600 dark:text-emerald-400'} ${(switchingTo && switchingTo !== a.user_id) || savingLogin ? 'opacity-40 cursor-not-allowed' : ''}`}
                         >
                           {switchingTo === a.user_id ? <Loader2 size={14} className="animate-spin" /> : <LogIn size={14} />}
                         </button>
@@ -629,10 +632,11 @@ export default function Accounts() {
                           title={savingLogin ? (savingLogin === a.user_id ? '保存中…' : '正在保存其他账号') : '保存当前登录态到该账号'}
                           onClick={() => void saveCurrentLogin(a.user_id, 'Trae')}
                           disabled={busy}
-                          className={`btn-ghost !p-2 ${savingLogin === a.user_id ? 'text-amber-500' : ''} ${(savingLogin && savingLogin !== a.user_id) || switchingTo ? 'opacity-40 cursor-not-allowed' : ''}`}
+                          className={`btn-ghost !h-7 !w-7 shrink-0 !p-0 ${savingLogin === a.user_id ? 'text-amber-500' : ''} ${(savingLogin && savingLogin !== a.user_id) || switchingTo ? 'opacity-40 cursor-not-allowed' : ''}`}
                         >
                           {savingLogin === a.user_id ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
                         </button>
+                        <span aria-hidden className="mx-0.5 h-4 w-px shrink-0 bg-slate-200 dark:bg-zinc-700" />
                         {/* SessionDead（JWT 被服务端吊销）时 exp 往往未到，必须常显续期入口，
                             否则与签到/切换失败的「点续期 JWT」指引断链（issue #9 审查项） */}
                         {(a.jwt_exp_hours === null || a.jwt_exp_hours <= 24 || a.cooldown_type === 'SessionDead') && (
@@ -647,7 +651,7 @@ export default function Accounts() {
                             }
                             onClick={() => void renewJwt(a.user_id)}
                             disabled={busy}
-                            className="btn-ghost !p-2 text-amber-500 hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-40 dark:hover:bg-amber-500/10"
+                            className="btn-ghost !h-7 !w-7 shrink-0 !p-0 text-amber-500 disabled:cursor-not-allowed disabled:opacity-40"
                           >
                             <KeyRound size={14} />
                           </button>
@@ -657,15 +661,14 @@ export default function Accounts() {
                             title={rowOpUid ? '行内操作进行中' : '刷新 JWT'}
                             onClick={() => void runRowOp(a.user_id, () => refreshJwt(a.user_id))}
                             disabled={rowOpUid != null}
-                            className="btn-ghost !p-2 text-sky-500 hover:bg-sky-50 dark:hover:bg-sky-500/10 disabled:cursor-not-allowed disabled:opacity-40"
+                            className="btn-ghost !h-7 !w-7 shrink-0 !p-0 disabled:cursor-not-allowed disabled:opacity-40"
                           >
                             {rowOpUid === a.user_id ? <Loader2 size={14} className="animate-spin" /> : <Zap size={14} />}
                           </button>
                         )}
                         {/* 重新 OAuth 登录：无 refresh_token / RT 失效 / RT 已过期
                             的账号无法自动续期，定向重新授权更新凭证（后端按 uid 校验防登错）。
-                            地球图标语义=打开浏览器授权；sky 配色在全部 6 个主题（含暗夜紫/
-                            琥珀暖夜）上均有足够对比 */}
+                            地球图标语义=打开浏览器授权（配色走中性，6 个主题下对比均足够） */}
                         {(!a.has_refresh_token ||
                           a.refresh_token_invalid ||
                           (a.refresh_token_expires_at != null &&
@@ -675,7 +678,7 @@ export default function Accounts() {
                             title="重新 OAuth 登录（浏览器授权，为该账号重新获取 JWT / refresh_token）"
                             onClick={() => setReloginTarget(a)}
                             disabled={busy || rowOpUid != null}
-                            className="btn-ghost !p-2 text-sky-600 hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-40 dark:text-sky-400 dark:hover:bg-sky-500/10"
+                            className="btn-ghost !h-7 !w-7 shrink-0 !p-0 disabled:cursor-not-allowed disabled:opacity-40"
                           >
                             <Globe size={14} />
                           </button>
@@ -685,7 +688,7 @@ export default function Accounts() {
                             title={rowOpUid ? '行内操作进行中' : '解除冷却'}
                             onClick={() => void runRowOp(a.user_id, () => cooldownClear(a.user_id))}
                             disabled={rowOpUid != null}
-                            className="btn-ghost !p-2 text-sky-500 hover:bg-sky-50 dark:hover:bg-sky-500/10 disabled:cursor-not-allowed disabled:opacity-40"
+                            className="btn-ghost !h-7 !w-7 shrink-0 !p-0 disabled:cursor-not-allowed disabled:opacity-40"
                           >
                             {rowOpUid === a.user_id ? <Loader2 size={14} className="animate-spin" /> : <Snowflake size={14} />}
                           </button>
@@ -694,14 +697,15 @@ export default function Accounts() {
                           title={switchingTo || savingLogin ? '切换/保存进行中，暂不能重置' : '重置设备 ID'}
                           onClick={() => void resetDevice(a.user_id)}
                           disabled={busy}
-                          className="btn-ghost !p-2 disabled:cursor-not-allowed disabled:opacity-40"
+                          className="btn-ghost !h-7 !w-7 shrink-0 !p-0 disabled:cursor-not-allowed disabled:opacity-40"
                         >
                           <RotateCcw size={14} />
                         </button>
-                        <button title="编辑账号" onClick={() => setEditTarget(a)} className="btn-ghost !p-2">
+                        <span aria-hidden className="mx-0.5 h-4 w-px shrink-0 bg-slate-200 dark:bg-zinc-700" />
+                        <button title="编辑账号" onClick={() => setEditTarget(a)} className="btn-ghost !h-7 !w-7 shrink-0 !p-0">
                           <Pencil size={14} />
                         </button>
-                        <button title="删除" onClick={() => void onDelete(a)} className="btn-ghost !p-2 text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-500/10">
+                        <button title="删除" onClick={() => void onDelete(a)} className="btn-ghost !h-7 !w-7 shrink-0 !p-0 text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-500/10">
                           <Trash2 size={14} />
                         </button>
                       </div>
@@ -862,7 +866,7 @@ export default function Accounts() {
           </>
         }
       >
-        <div className="space-y-3 text-sm">
+        <div className="space-y-3.5 text-sm">
           <div>即将导出 {accounts.length} 个账号，文件包含明文 JWT / refreshToken 凭证（等同密码）。</div>
           <div className="flex items-start gap-2 rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-300">
             <ShieldAlert size={14} className="mt-0.5 shrink-0" />
