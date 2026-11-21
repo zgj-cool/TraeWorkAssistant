@@ -411,8 +411,12 @@ fn repair_window_geometry(window: &tauri::WebviewWindow) {
 /// （窗口仍隐藏，用户看不到中间过程），避免从托盘恢复时出现「尺寸由小到大」的闪烁：
 /// - 几何失效（休眠唤醒/显示器变更后落到屏外或尺寸退化）→ 平移回最近显示器工作区
 ///   并保留用户尺寸（issue #183：任务栏有图标但主页面无法显示、缩略图只有一条线）；
-/// - 隐藏前为最大化但状态/视觉已失同步（issue #46）→ 才 unmaximize→maximize 重建；
-///   状态与尺寸都正常时不再重建（原实现无条件重建，正是缩放闪烁的来源）。
+/// - 隐藏前为最大化但状态/视觉已失同步（issue #46 / #211）→ 才 unmaximize→maximize 重建。
+///   重建必须先于 show：窗口隐藏时 tao 跳过 ShowWindow（无 SW_MAXIMIZE/SW_RESTORE 动画），
+///   仅更新 Win32 样式与内部标志；若在 show 之后重建，用户会看到窗口先以还原尺寸出现、
+///   再跳变最大化——即「每次从托盘打开界面闪一下」。
+///   本地实现额外用「外框尺寸比对」判定是否**真的**失同步（状态与尺寸都正常时不再重建，
+///   原实现无条件重建正是缩放闪烁的来源）。
 fn show_main_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let (was_maximized, hidden_size) = app
@@ -436,7 +440,7 @@ fn show_main_window(app: &tauri::AppHandle) {
             repair_window_geometry(&window);
         }
         // 仅在确实失同步时重建最大化，且重建发生在 show 之前：窗口仍隐藏，
-        // 中间的「还原尺寸」不会被用户看到（issue #46 + 托盘恢复缩放闪烁）
+        // 中间的「还原尺寸」不会被用户看到（issue #46 + #211 + 托盘恢复缩放闪烁）
         if was_maximized && maximized_state_desynced(&window, hidden_size) {
             if let Some(st) = app.try_state::<AppState>() {
                 fs_utils::app_log(
@@ -493,7 +497,59 @@ fn splash_background(theme: &str) -> tauri::window::Color {
     }
 }
 
+/// 全局 panic hook（issue #224）：GUI 子系统（windows_subsystem="windows"）无 stderr，
+/// panic 默认 hook 的输出全部丢弃——表现为「app.log 戛然而止、无任何错误提示」的
+/// 无声崩溃。abort（panic 跨 FFI 边界无法 unwind 被强制 abort、double panic）前
+/// 也会先过本 hook，留痕后再终止，可观测性对 0xc0000409 类崩溃是唯一线索。
+/// 记录：线程名 + panic 位置 + 消息 + 强制 backtrace（release 无 PDB 时仍含
+/// 帧地址，可与报告的异常偏移直接对应做符号化）。CLI 任务模式（--task-run）
+/// 与 GUI 共用本入口，一并覆盖。
+fn install_panic_hook() {
+    std::panic::set_hook(Box::new(move |info| {
+        let thread = std::thread::current()
+            .name()
+            .unwrap_or("<unnamed>")
+            .to_string();
+        let loc = info
+            .location()
+            .map(|l| format!("{}:{}", l.file(), l.line()))
+            .unwrap_or_else(|| "<unknown>".to_string());
+        let msg = info
+            .payload()
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| info.payload().downcast_ref::<&str>().map(|s| s.to_string()))
+            .unwrap_or_else(|| "<non-string payload>".to_string());
+        // 审查修复（#224 跟进）：先落 app.log 再打 stderr——stderr 句柄存在但无效时
+        // print 宏写失败会在 hook 内二次 panic → double panic abort，若文件先落盘
+        // 则线索不丢；日志写入自身全吞错（fs_utils::app_log 无 panic 路径）
+        fs_utils::app_log_default(&format!("[PANIC] thread={thread} loc={loc} msg={msg}"));
+        eprintln!("[PANIC] thread={thread} loc={loc} msg={msg}");
+        let bt = std::backtrace::Backtrace::force_capture().to_string();
+        if !bt.trim().is_empty() {
+            fs_utils::app_log_default(&format!("[PANIC] backtrace:\n{bt}"));
+            eprintln!("[PANIC] backtrace:\n{bt}");
+        }
+    }));
+}
+
 fn main() {
+    // 全局 panic hook 必须最先安装（在任何可能 panic 的初始化之前），兜底观测
+    // 窗口覆盖整个进程生命周期（含 CLI 任务模式与 migrate 阶段）
+    install_panic_hook();
+
+    // issue #224：TLS 加密后端进程默认收敛到 ring（纯 Rust）——rustls 0.23 默认
+    // provider 是 aws-lc-rs（C 代码），内部错误直接 abort → 0xc0000409/0x7 无声崩溃；
+    // ring 路径异常为可捕获的 Rust panic。install_default 仅首次生效，幂等；
+    // 失败（如未来依赖在更早阶段抢先安装了非 ring provider）时告警留痕，
+    // 避免 TLS 收敛目标静默退化（rcgen CA 签发的 KeyPair 不走 rustls provider，
+    // 仍由 aws_lc_rs 承担，不受影响）
+    if let Err(e) = tokio_rustls::rustls::crypto::ring::default_provider().install_default() {
+        let msg = format!("[TLS] ring provider 安装失败，进程默认 provider 已被抢占: {e:?}");
+        eprintln!("{msg}");
+        fs_utils::app_log_default(&msg);
+    }
+
     // 品牌迁移（老版本 Trae Work Assistant → AI Work 助手）：
     // 必须在 AppState::new 创建新数据目录之前执行；迁移为「复制」语义，
     // 旧数据目录原地保留（老应用可继续使用，两版并存），已迁移过则自动跳过
@@ -647,6 +703,7 @@ fn main() {
             commands::misc::settings_get,
             commands::misc::settings_set,
             commands::misc::notify_test,
+            commands::misc::notify_last_result_get,
             commands::misc::invite_link,
             commands::misc::credits_history,
             commands::misc::task_register,
@@ -698,6 +755,13 @@ fn main() {
             // 池级指纹清洗开关（issue #158 P1-4：wb_sanitize / qoder_sanitize 热切换）
             commands::api_server::sanitize_switches_get,
             commands::api_server::sanitize_switch_set,
+            // 伪流式开关 / 重试预算 / keep-alive 间隔（issue #213 S7）
+            commands::api_server::pseudo_stream_switches_get,
+            commands::api_server::pseudo_stream_switch_set,
+            commands::api_server::retry_budgets_get,
+            commands::api_server::retry_budget_set,
+            commands::api_server::pseudo_keepalive_get,
+            commands::api_server::pseudo_keepalive_set,
             commands::api_server::api_unified_models,
             commands::api_server::dispatch_policy_get,
             commands::api_server::dispatch_policy_set,
@@ -887,6 +951,8 @@ fn main() {
             window_logical_zoom_set,
         ])
         .setup(|app| {
+            // 审查修复 #2：注册全局句柄供后台线程状态告警弹桌面通知（notify.rs global_app）
+            crate::notify::set_global_app(app.handle().clone());
             let state = app.state::<AppState>();
 
             // 数据存储层 SQLite 化（docs/sqllite-storage-plan.md）：旧 JSON 导入 aiwork.sqlite
