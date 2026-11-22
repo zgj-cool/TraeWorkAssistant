@@ -135,6 +135,9 @@ function DispatchCenterCard({
   // 重输」直接跳 0，误失焦即静默保存 0（=关闭调度保护）；现空串/非法输入失焦时
   // 还原策略值不落盘，合法整数才提交（保存侧 fail-closed，无失焦抢跑钳制）
   const [reserveDraft, setReserveDraft] = useState<string | null>(null);
+  // 按池覆盖草稿（池名 → 原始输入串）：同 reserveDraft 口径——null/空串表示
+  // 「沿用兜底值」，非空合法数值才落盘；失焦校验失败即还原不落盘
+  const [reservePoolDrafts, setReservePoolDrafts] = useState<Record<string, string>>({});
   // F2：保存请求序号守卫（仅最新一次响应可写状态）
   const saveSeqRef = useRef(0);
 
@@ -266,6 +269,66 @@ function DispatchCenterCard({
     } finally {
       if (seq === saveSeqRef.current) setSaving(false);
     }
+  };
+
+  /** 池级覆盖草稿回显：有草稿用草稿，否则展示已生效值（无覆盖时显示空，
+   *  以 placeholder 提示兜底值——避免把「沿用兜底」误显示成显式配置） */
+  const reserveDraftOf = (p: string): string | null => {
+    if (p in reservePoolDrafts) return reservePoolDrafts[p];
+    const v = policy?.reserve_credits_by_pool?.[p];
+    return v == null ? null : String(v);
+  };
+
+  const setReservePoolDraft = (p: string, v: string) => {
+    setReservePoolDrafts((cur) => ({ ...cur, [p]: v }));
+  };
+
+  /** 池级覆盖失焦提交：空串 = 清除该池覆盖（回到兜底值）；
+   *  非法输入 = 放弃编辑不落盘（与全局阈值同一 fail-closed 口径） */
+  const commitReservePool = (p: string) => {
+    if (!policy) return;
+    const raw = reservePoolDrafts[p];
+    if (raw == null) return;
+    const t = raw.trim();
+    const next = { ...(policy.reserve_credits_by_pool ?? {}) };
+    if (t === '') {
+      // 空 = 回到兜底值（删键）
+      if (next[p] == null) {
+        setReservePoolDrafts((cur) => {
+          const c = { ...cur };
+          delete c[p];
+          return c;
+        });
+        return;
+      }
+      delete next[p];
+    } else {
+      if (!/^\d+(\.\d+)?$/.test(t)) {
+        // 非法：还原（删草稿让输入框回显已生效值），不落盘
+        setReservePoolDrafts((cur) => {
+          const c = { ...cur };
+          delete c[p];
+          return c;
+        });
+        return;
+      }
+      const v = Math.max(0, Number(t));
+      if (v === next[p]) {
+        setReservePoolDrafts((cur) => {
+          const c = { ...cur };
+          delete c[p];
+          return c;
+        });
+        return;
+      }
+      next[p] = v;
+    }
+    setReservePoolDrafts((cur) => {
+      const c = { ...cur };
+      delete c[p];
+      return c;
+    });
+    void savePolicy({ reserve_credits_by_pool: next });
   };
 
   if (!policy) {
@@ -416,7 +479,7 @@ function DispatchCenterCard({
           </label>
           <label
             className="flex items-center gap-2"
-            title="剩余积分低于或等于该值的账号暂停调度（切换其他账号），防止积分被耗尽后免费模型也不可用；0 = 关闭"
+            title="剩余积分低于或等于该值的账号暂停调度（切换其他账号），防止积分被耗尽后免费模型也不可用；0 = 关闭。此项为各池未单独配置时的兜底值，按池覆盖见下方「池内调度」"
           >
             <span className="text-slate-400 dark:text-zinc-500">账号保留剩余积分</span>
             <input
@@ -451,6 +514,7 @@ function DispatchCenterCard({
         </p>
         <p className="mt-1 text-[11px] text-slate-400 dark:text-zinc-500">
           账号保留剩余积分：剩余 ≤ 阈值的账号暂停调度（默认 50，0 = 关闭），防止积分被调度耗尽后免费模型也不可用。
+          该值为兜底阈值，各池可在下方「池内调度」按池单独覆盖（各池积分量级不同，如 Qoder credits 通常远低于 Trae 通用积分）。
         </p>
 
         {/* ②+ per_model 模型绑定池（DispatchPolicy.per_model）：显式为单个模型固定
@@ -632,6 +696,38 @@ function DispatchCenterCard({
           <span className="text-slate-400 dark:text-zinc-500">
             上游开关与成员在各应用「资源调度」页配置
           </span>
+        </div>
+
+        {/* 按池覆盖保留积分阈值（DispatchPolicy.reserve_credits_by_pool）：
+            各池积分量级差异大——统一 50 会把 Qoder 池整体踢出调度。
+            缺键 = 沿用上方兜底值；填 0 = 该池关闭该过滤。 */}
+        <div className="mt-3 border-t border-slate-100 pt-3 dark:border-zinc-800">
+          <div className="mb-1.5 text-[11px] font-medium text-slate-500 dark:text-zinc-400">
+            按池覆盖「账号保留剩余积分」（留空 = 沿用上方兜底值；0 = 该池关闭过滤）
+          </div>
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
+            {(['trae', 'buddy', 'qoder', 'buddy-ai'] as const)
+              .filter((p) => isPoolVisible(settings, p))
+              .map((p) => (
+                <label key={p} className="flex items-center gap-1.5">
+                  <span className="text-slate-400 dark:text-zinc-500">{POOL_LABELS[p]}</span>
+                  <input
+                    type="number"
+                    className={`${selectCls} w-20`}
+                    min={0}
+                    step={1}
+                    placeholder={String(policy.reserve_credits)}
+                    disabled={saving}
+                    value={reserveDraftOf(p) ?? ''}
+                    onChange={(e) => setReservePoolDraft(p, e.target.value)}
+                    onBlur={() => commitReservePool(p)}
+                  />
+                </label>
+              ))}
+            <span className="text-[11px] text-slate-400 dark:text-zinc-500">
+              各池积分量级不同（Qoder credits 通常远低于 Trae 通用积分），建议按池设置
+            </span>
+          </div>
         </div>
       </div>
     </div>

@@ -550,17 +550,37 @@ export function summarizeCreditUsage(data: OverviewData, nowMs = Date.now()): Cr
   const prevSnap = todaySnap
     ? ([...snaps].reverse().find((s) => s.date.slice(0, 10) < today) ?? null)
     : null;
+  // 当日签到奖励按账号汇总（奖励口径与「获得积分」同源：campaigns 明细优先，
+  // 无明细时回退 reward）。**必须参与差分**：Qoder 每日签到 +100 会让余额逆势上涨，
+  // 只算「前日 − 当日」会把真实消耗钳成 0（线上表现为明细恒 0），
+  // 正确公式与后端快照 consumed 一致：消耗 = 前日余额 + 当日获得 − 当日余额
+  const earnedByUid = new Map<string, number>();
+  for (const r of data.qoderCheckin ?? []) {
+    if (r.date !== today || r.status === 'fail') continue;
+    const reward = r.campaigns?.length
+      ? r.campaigns.reduce((s, c) => s + (c.reward ?? 0), 0)
+      : (r.reward ?? 0);
+    if (reward > 0) earnedByUid.set(r.user_id, (earnedByUid.get(r.user_id) ?? 0) + reward);
+  }
   for (const a of data.qoderAccounts) {
     const cur = todaySnap?.accounts?.find((x) => x.user_id === a.id)?.total ?? null;
     const prev = prevSnap?.accounts?.find((x) => x.user_id === a.id)?.total ?? null;
-    const used = cur != null && prev != null ? Math.max(0, round(prev - cur)) : null;
+    const earned = earnedByUid.get(a.id) ?? 0;
+    const used = cur != null && prev != null ? Math.max(0, round(prev + earned - cur)) : null;
     rows.push({
       id: `qoder-${a.id}`,
       platform: 'qoder',
       uid: a.id,
       name: a.nickname,
       credits: used,
-      source: used != null ? '快照差分' : todaySnap ? '快照无前一日对比' : '今日快照未更新',
+      source:
+        used != null
+          ? earned > 0
+            ? `快照差分（含当日签到 +${round(earned)} 补正）`
+            : '快照差分'
+          : todaySnap
+            ? '快照无前一日对比'
+            : '今日快照未更新',
     });
   }
 

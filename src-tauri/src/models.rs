@@ -920,9 +920,17 @@ pub struct ApiPoolFile {
     pub qoder_hedge_threshold_ms: u64,
     /// Qoder 会话粘性开关（F-80-余 v2）：开启后同会话（显式 conversationId /
     /// 消息指纹）在 TTL 内绑定同一 Qoder 账号——同账号 + 同种子派生同一上游
-    /// session_id，保住上游会话侧复用；默认 false（v1 轮换行为）
-    #[serde(default)]
+    /// session_id，保住上游会话侧复用。
+    /// **默认开启**（v3.9.6 起）：Qoder 上游首字 40–71s、prefill 成本高，
+    /// 同会话换账号会丢失上游会话缓存，实测消耗偏高；显式关闭即回到轮换调度
+    #[serde(default = "default_true")]
     pub qoder_sticky_enabled: bool,
+    /// Qoder 会话粘性「新默认」迁移标记（v3.9.6，一次性）：旧版默认 false 会把
+    /// `qoder_sticky_enabled: false` 显式写进配置文件，单靠 serde default 无法区分
+    /// 「旧默认」与「用户主动关闭」。本标记缺失 = 旧配置 → 加载时强制开启一次并置位；
+    /// 置位后用户再关闭即为显式选择，不再被迁移覆盖
+    #[serde(default)]
+    pub qoder_sticky_default_on: bool,
     /// Qoder 池账号并发上限（per-pool 三参数之一，默认 1；0 = 不限）
     #[serde(default = "default_account_concurrency_limit")]
     pub qoder_account_concurrency_limit: u32,
@@ -1053,7 +1061,8 @@ impl Default for ApiPoolFile {
             wb_group_ids: Vec::new(),
             qoder_enabled: false,
             qoder_hedge_threshold_ms: default_hedge_threshold_ms(),
-            qoder_sticky_enabled: false,
+            qoder_sticky_enabled: true,
+        qoder_sticky_default_on: true,
             qoder_account_concurrency_limit: default_account_concurrency_limit(),
             qoder_pool_sticky_ttl_secs: default_pool_sticky_ttl_secs(),
             qoder_sticky_ttl_secs: default_sticky_ttl_secs(),

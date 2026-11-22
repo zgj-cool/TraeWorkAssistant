@@ -847,7 +847,7 @@ export default function BuddyAiApiService() {
                       max: 8000,
                       value: aiHedgeMs,
                       setValue: setAiHedgeMs,
-                      desc: '流式首字节超此时长即向第二账号发对冲请求，先出首字者胜；0 = 关闭（有效范围 1s-8s、与后端对齐）',
+                      desc: '流式首字节超此时长即向第二账号发对冲请求，先出首字者胜；0 = 关闭（上限 8s，更长的阈值等不到对冲；小于 1s 会频繁双发、增加积分消耗）',
                       save: (v: number) => ({ buddyAiHedgeThresholdMs: v }),
                     },
                   ] as const

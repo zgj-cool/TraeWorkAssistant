@@ -140,6 +140,8 @@ export default function CreditsTab({
     let requests = 0;
     let okRequests = 0;
     let errRequests = 0;
+    // 峰谷折扣前原价合计（仅 Qoder 网关源有测量；0 = 无折前数据，不展示折扣行）
+    let originalConsumed = 0;
     // Trae 账号筛选时，老快照行无 accounts 明细被跳过的天数（KPI hint 如实标注）
     let earnedSkippedDates = 0;
     const addConsume = (date: string, v: number) => {
@@ -180,6 +182,12 @@ export default function CreditsTab({
           : day.errors;
         addConsume(day.date, dayConsume);
         requests += dayConsume;
+        // 折前原价同源同筛选口径累计：与实扣相减即该区间的峰谷折扣额
+        if (isGatewayCredits) {
+          originalConsumed += matched
+            ? matched.reduce((s, m) => s + (m.original_credits ?? 0), 0)
+            : (day.original_credits ?? 0);
+        }
         for (const m of day.models) {
           // 趋势图恒为全模型（issue #160 替换排行；模型筛选仅作用于上方消耗合计线/KPI）
           const v = isGatewayCredits ? m.credits : m.requests;
@@ -249,7 +257,7 @@ export default function CreditsTab({
     for (const v of consumeByDate.values()) consumed += v;
     let earned = 0;
     for (const v of earnedByDate.values()) earned += v;
-    return { consumeByDate, earnedByDate, modelByDate, consumed, earned, sessions, requests, okRequests, errRequests, earnedSkippedDates };
+    return { consumeByDate, earnedByDate, modelByDate, consumed, earned, sessions, requests, okRequests, errRequests, earnedSkippedDates, originalConsumed };
 
     function consumeEarned(date: string, v: number) {
       earnedByDate.set(date, (earnedByDate.get(date) ?? 0) + v);
@@ -399,7 +407,13 @@ export default function CreditsTab({
                   <StatCard
                     label="区间总消耗"
                     value={fmtCredits(agg.requests)}
-                    hint={`网关测量值（90 天保留窗口）${modelFilter ? ` · 已筛选 ${modelFilter}` : ''}`}
+                    hint={
+                      `网关测量值（90 天保留窗口）${modelFilter ? ` · 已筛选 ${modelFilter}` : ''}` +
+                      // 折前原价只在确实存在折扣差额时追加，避免「0 = 无数据」被读成「无折扣」
+                      (agg.originalConsumed > agg.requests
+                        ? ` · 折前 ${fmtCredits(agg.originalConsumed)}（省 ${fmtCredits(agg.originalConsumed - agg.requests)}）`
+                        : '')
+                    }
                     tone="amber"
                   />
                 ) : (

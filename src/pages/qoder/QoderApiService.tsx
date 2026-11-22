@@ -37,9 +37,12 @@ export default function QoderApiService() {
   const [status, setStatus] = useState<ApiServiceStatus | null>(null);
   const [pool, setPool] = useState<ApiPoolFile | null>(null);
   const [qoderEnabled, setQoderEnabled] = useState(false);
-  // F-80-余 v2：竞速对冲阈值（0 = 关闭）+ 会话粘性开关（默认关）
+  // F-80-余 v2：竞速对冲阈值（0 = 关闭）+ 会话粘性开关（v3.9.6 起默认开）
   const [qoderHedgeThresholdMs, setQoderHedgeThresholdMs] = useState(8_000);
-  const [qoderStickyEnabled, setQoderStickyEnabled] = useState(false);
+  const [qoderStickyEnabled, setQoderStickyEnabled] = useState(true);
+  // 会话粘性切换为即时落库（不再依赖面板右上角「保存」——此前只改本地 state，
+  // 未点保存就离开页面即丢失，表现为「开启后仍是关」）
+  const [savingSticky, setSavingSticky] = useState(false);
   // 免费活动模型倍率覆盖（issue #111/#156，默认开）：Qwen3.8-Flash 与
   // DeepSeek-Flash 目录倍率按 0 处理 + 取号豁免零积分过滤；上游活动结束后
   // 关闭恢复官方同步倍率
@@ -119,7 +122,8 @@ export default function QoderApiService() {
         setQoderEnabled(pf.qoder_enabled ?? false);
         // F-80-余 v2 参数回显（缺省对齐后端 serde default：对冲 8s / 粘性关）
         setQoderHedgeThresholdMs(pf.qoder_hedge_threshold_ms ?? 8_000);
-        setQoderStickyEnabled(pf.qoder_sticky_enabled ?? false);
+        // v3.9.6：后端默认开 + 一次性迁移，缺省按开回显
+        setQoderStickyEnabled(pf.qoder_sticky_enabled ?? true);
         // Qwen3.8-Flash 免费活动倍率覆盖（issue #111，缺省对齐后端 serde default：开）
         setFlashFreeRate(pf.qoder_flash_free_rate ?? true);
         // per-pool 调度参数回显（缺省对齐后端 serde default：并发 1 / 池粘性 300s / 会话粘性 1800s）
@@ -251,6 +255,39 @@ export default function QoderApiService() {
       pushToast('error', `保存失败：${String(err)}`);
     } finally {
       setSavingFlashFree(false);
+    }
+  };
+
+  // 会话粘性开关即时保存（v3.9.6）：只传本字段，其余 pool_set 参数 null = 保留原值；
+  // uids/strategy/groups 回传池快照（防清空 Trae 池白名单，同 saveFlashFree 防护）。
+  // 乐观 UI + 失败回滚，避免「点了没反应」与「刷新后又变回关」
+  const toggleSticky = async (next: boolean) => {
+    if (!pool) {
+      pushToast('error', '池配置未加载，无法保存（请先刷新重试）');
+      return;
+    }
+    const prev = qoderStickyEnabled;
+    setQoderStickyEnabled(next);
+    setSavingSticky(true);
+    try {
+      await withMinDelay(
+        api.apiServer.poolSet(pool.enabled_uids, pool.strategy, pool.group_ids, {
+          qoderStickyEnabled: next,
+        }),
+        400,
+      );
+      pushToast(
+        'success',
+        next
+          ? '会话粘性已开启：同会话在 TTL 内绑定同一账号，保住上游会话缓存'
+          : '会话粘性已关闭：回到每请求轮换调度',
+      );
+      await refresh().catch(() => {});
+    } catch (err) {
+      setQoderStickyEnabled(prev);
+      pushToast('error', `切换会话粘性失败：${String(err)}`);
+    } finally {
+      setSavingSticky(false);
     }
   };
 
@@ -702,31 +739,35 @@ export default function QoderApiService() {
                   <span className="text-[11px] text-slate-400">秒</span>
                 </span>
               </div>
-              {/* F-80-余 v2：会话粘性开关（默认关；同账号+同种子派生同一上游 session） */}
+              {/* F-80-余 v2：会话粘性开关（v3.9.6 默认开；切换即时落库） */}
               <label className="flex cursor-pointer items-start gap-2.5 rounded-md px-1.5 py-1.5 transition hover:bg-slate-100/60 dark:hover:bg-zinc-800/60">
                 <input
                   type="checkbox"
                   className="mt-0.5 h-3.5 w-3.5 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
                   checked={qoderStickyEnabled}
-                  onChange={() => setQoderStickyEnabled((v) => !v)}
+                  disabled={savingSticky || !pool}
+                  onChange={(e) => void toggleSticky(e.target.checked)}
                 />
                 <span className="min-w-0">
-                  <span className="block text-xs text-slate-700 dark:text-zinc-200">会话粘性</span>
+                  <span className="block text-xs text-slate-700 dark:text-zinc-200">
+                    会话粘性{savingSticky ? '（保存中…）' : ''}
+                  </span>
                   <span className="block text-[11px] leading-4 text-slate-400 dark:text-zinc-500">
                     显式 conversationId 按会话粘性 TTL（当前 {qoderStickyTtlSecs}s）绑定账号（滚动续期）、
                     消息指纹 60 秒短窗；同账号 + 同种子派生同一上游 session_id，保住会话侧复用；
-                    账号 busy 且有空闲候选时自动让位（并发优先）。默认关闭（轮换调度）
+                    账号 busy 且有空闲候选时自动让位（并发优先）。默认开启，切换即保存
                   </span>
                 </span>
               </label>
-              {/* F-80-余 v2：竞速对冲阈值（0 = 关闭；有效范围 1s–8s 与后端对齐） */}
+              {/* F-80-余 v2：竞速对冲阈值（0 = 关闭；上限 8s，下限不再静默抬高） */}
               <div className="flex items-center justify-between gap-3 px-1.5 pt-1">
                 <span className="min-w-0">
                   <span className="block text-xs text-slate-700 dark:text-zinc-200">竞速对冲阈值</span>
                   <span className="block text-[11px] leading-4 text-slate-400 dark:text-zinc-500">
                     流式/聚合首字节超过该时长即向第二账号发对冲请求，先出首字者胜；
-                    0 = 关闭（有效范围 1s–8s）。适用于上游首字节缓慢（静默排队 /
-                    prefill 等待）；10605 排队通知为即时信封、由同号退避处理
+                    0 = 关闭（上限 8s，更长的阈值等不到对冲）。适用于上游首字节缓慢
+                    （静默排队 / prefill 等待）；10605 排队通知为即时信封、由同号退避处理。
+                    Qoder 上游首字实测可达 40–71s，建议关闭或设 0
                   </span>
                 </span>
                 <span className="flex shrink-0 items-center gap-1.5">

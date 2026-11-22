@@ -22,7 +22,7 @@ import {
 } from 'recharts';
 import { StatCard } from '../ui';
 import { api } from '../../lib/tauri';
-import { fmtTokens } from '../../lib/format';
+import { fmtCredits, fmtTokens } from '../../lib/format';
 import { cn } from '../../lib/cn';
 import { useAppStore } from '../../store';
 import { isPoolVisible } from '../../lib/appVisibility';
@@ -57,6 +57,7 @@ function mergeCounters(a: UsageCounterView[], b: UsageCounterView[]): UsageCount
       e.ok += c.ok;
       e.errors += c.errors;
       e.credits += c.credits;
+      e.original_credits = (e.original_credits ?? 0) + (c.original_credits ?? 0);
     } else {
       map.set(c.name, { ...c });
     }
@@ -327,7 +328,10 @@ export default function UsageStatsPanel() {
 
   // 汇总（跨天聚合）+ 图表数据（与原页面统计逻辑一致，纯搬移）
   const summary = useMemo(() => {
-    const models = new Map<string, { requests: number; ok: number; errors: number }>();
+    const models = new Map<
+      string,
+      { requests: number; ok: number; errors: number; credits: number; originalCredits: number }
+    >();
     const modelLatency = new Map<string, UsageModelLatencyView>();
     const t = usage.reduce(
       (acc, d) => {
@@ -341,10 +345,14 @@ export default function UsageStatsPanel() {
         acc.ttfbSamples += d.ttfb_samples ?? 0;
         acc.weightedTtfb += (d.avg_ttfb_ms ?? 0) * (d.ttfb_samples ?? 0);
         for (const m of d.models) {
-          const e = models.get(m.name) ?? { requests: 0, ok: 0, errors: 0 };
+          const e =
+            models.get(m.name) ??
+            { requests: 0, ok: 0, errors: 0, credits: 0, originalCredits: 0 };
           e.requests += m.requests;
           e.ok += m.ok;
           e.errors += m.errors;
+          e.credits += m.credits ?? 0;
+          e.originalCredits += m.original_credits ?? 0;
           models.set(m.name, e);
         }
         for (const m of d.model_latency ?? []) {
@@ -384,6 +392,8 @@ export default function UsageStatsPanel() {
       ...t,
       topModels,
       latencyModels,
+      // 是否展示积分列：仅 Qoder 池测量到积分时出现（其余池不估算，保持表格干净）
+      hasBilling: topModels.some((m) => m.credits > 0 || m.originalCredits > 0),
       successRate: t.requests > 0 ? ((t.ok / t.requests) * 100).toFixed(1) : '—',
       avgDuration: t.requests > 0 ? Math.round(t.weightedDuration / t.requests) : 0,
       avgTtfb: t.ttfbSamples > 0 ? Math.round(t.weightedTtfb / t.ttfbSamples) : undefined,
@@ -543,6 +553,14 @@ export default function UsageStatsPanel() {
                   <th className="pb-2 pr-4 font-medium">请求数</th>
                   <th className="pb-2 pr-4 font-medium">成功</th>
                   <th className="pb-2 pr-4 font-medium">失败</th>
+                  {summary.hasBilling && (
+                    <th
+                      className="pb-2 pr-4 font-medium"
+                      title="上游实扣积分（usage.credits）与峰谷折扣前原价（original_credits）；仅覆盖走网关的 Qoder 流量"
+                    >
+                      实扣 / 折前积分
+                    </th>
+                  )}
                   <th className="pb-2 font-medium">占比</th>
                 </tr>
               </thead>
@@ -560,6 +578,19 @@ export default function UsageStatsPanel() {
                       <td className="py-2 pr-4 tabular-nums text-slate-600 dark:text-zinc-300">{m.requests}</td>
                       <td className="py-2 pr-4 tabular-nums text-emerald-600 dark:text-emerald-400">{m.ok}</td>
                       <td className="py-2 pr-4 tabular-nums text-rose-600 dark:text-rose-400">{m.errors}</td>
+                      {summary.hasBilling && (
+                        <td className="py-2 pr-4 tabular-nums text-amber-600 dark:text-amber-400">
+                          {fmtCredits(m.credits)}
+                          {m.originalCredits > m.credits && (
+                            <span
+                              className="ml-1 text-[11px] text-slate-400 dark:text-zinc-500"
+                              title="峰谷折扣前原价（上游 original_credits）"
+                            >
+                              / {fmtCredits(m.originalCredits)}
+                            </span>
+                          )}
+                        </td>
+                      )}
                       <td className="w-40 py-2">
                         <div className="flex items-center gap-2">
                           <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-100 dark:bg-zinc-800">

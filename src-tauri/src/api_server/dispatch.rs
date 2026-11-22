@@ -137,9 +137,15 @@ pub struct DispatchPolicy {
     #[serde(default = "default_true")]
     pub fallback: bool,
     /// 账号保留剩余积分（issue #91）：剩余 ≤ 该值的账号暂停调度（0 = 关闭），
-    /// 默认 50——防止账号积分被调度耗尽后连免费模型也不可用
+    /// 默认 50——防止账号积分被调度耗尽后连免费模型也不可用。
+    /// 作为**未单独配置的池**的兜底值（池级覆盖见 `reserve_credits_by_pool`）。
     #[serde(default = "default_reserve_credits")]
     pub reserve_credits: f64,
+    /// 按池的保留积分覆盖（池名 → 阈值；缺键/未列出 = 沿用 `reserve_credits`）。
+    /// 拆分理由：各池积分量级不同（Qoder 单账号 credits 常远低于 Trae 通用积分），
+    /// 统一 50 会把 Qoder 账号整体踢出调度；0 表示该池关闭该过滤。
+    #[serde(default)]
+    pub reserve_credits_by_pool: HashMap<String, f64>,
     /// /v1/models 为多源同名模型附带池前缀别名条目（issue #90 修复③a）：
     /// `trae/xxx` / `buddy/xxx` / `buddy-ai/xxx` / `qoder/xxx`——各池同名模型
     /// 倍率与效果不同，开启后客户端可按前缀点名指定池服务（resolve_target 按
@@ -158,6 +164,18 @@ fn default_reserve_credits() -> f64 {
     50.0
 }
 
+impl DispatchPolicy {
+    /// 某池实际生效的保留积分阈值：池级覆盖优先，无覆盖回退全局值。
+    /// `pool` 取 `TargetPool::as_str()` 口径（trae/buddy/buddy-ai/qoder/custom）。
+    pub fn reserve_for(&self, pool: &str) -> f64 {
+        self.reserve_credits_by_pool
+            .get(pool)
+            .copied()
+            .unwrap_or(self.reserve_credits)
+            .max(0.0)
+    }
+}
+
 impl Default for DispatchPolicy {
     fn default() -> Self {
         DispatchPolicy {
@@ -166,6 +184,7 @@ impl Default for DispatchPolicy {
             per_model: HashMap::new(),
             fallback: true,
             reserve_credits: default_reserve_credits(),
+            reserve_credits_by_pool: HashMap::new(),
             model_source_labels: false,
             updated_at: 0,
         }
@@ -190,6 +209,14 @@ fn load_policy_uncached(data_dir: &Path) -> DispatchPolicy {
     p.priority = if valid.is_empty() { default_priority() } else { valid };
     // 防御：保留积分阈值负值归零（0 = 关闭过滤）
     p.reserve_credits = p.reserve_credits.max(0.0);
+    // 池级覆盖同样过滤非法池名（未知池名保留但不会被消费，仍按池名原样清洗
+    // 会造成脏数据堆积）+ 负值归零
+    p.reserve_credits_by_pool = p
+        .reserve_credits_by_pool
+        .drain()
+        .filter(|(k, _)| TargetPool::parse(k).is_some())
+        .map(|(k, v)| (TargetPool::parse(&k).map(|t| t.as_str().to_string()).unwrap_or(k), v.max(0.0)))
+        .collect();
     // per_model 键统一 canonical_id（与目录归并/元数据覆盖层同语义），
     // 值过滤非法池名
     p.per_model = p
@@ -1336,14 +1363,19 @@ fn pool_sticky_ttl_secs(state: &ApiSharedState, pool: TargetPool) -> u64 {
     cell.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-/// 记录/续期池粘性绑定（TTL 按胜出池的独立配置取值，F-76② per-pool）
+/// 记录/续期池粘性绑定（TTL 按胜出池的独立配置取值，F-76② per-pool）。
+///
+/// TTL = 0 表示**关闭池粘性**（配置页文案口径）：清掉该 key 的既有绑定且不写
+/// 新绑定，而非旧实现的 `.max(1)`——那会让「0 = 关闭」实际退化为 1 秒，表现为
+/// 几乎每请求重新选池，与文案不符且无任何提示。
 fn record_sticky(state: &Arc<ApiSharedState>, key: &str, pool: TargetPool) {
-    let ttl = pool_sticky_ttl_secs(state, pool).max(1) as i64;
+    let ttl = pool_sticky_ttl_secs(state, pool);
     let mut map = state.pool_sticky.lock().unwrap_or_else(|e| e.into_inner());
-    map.insert(
-        key.to_string(),
-        (pool, now_ts() + ttl),
-    );
+    if ttl == 0 {
+        map.remove(key);
+        return;
+    }
+    map.insert(key.to_string(), (pool, now_ts() + ttl as i64));
 }
 
 fn now_ts() -> i64 {
@@ -2180,6 +2212,104 @@ mod tests {
         )
         .unwrap();
         assert_eq!(a2.pool, TargetPool::Buddy);
+    }
+
+    /// 池粘性 TTL = 0 → 真正关闭（不留绑定），而非旧实现退化成 1 秒：
+    /// 解析后粘性表为空，且改策略即时生效（不被粘性锁在旧池）
+    #[test]
+    fn t20b_pool_sticky_ttl_zero_disables_sticky() {
+        use std::sync::atomic::Ordering;
+        let f = fixture(&["glm-5.3"], Some(&["glm-5.3"]), Some(&policy_default()));
+        f.seed_healthy(true);
+        f.seed_healthy(false);
+        // 默认策略首轮命中 Buddy → 关闭 Buddy 侧池粘性即关闭本次命中的粘性
+        f.state.wb_pool_sticky_ttl_secs.store(0, Ordering::Relaxed);
+        let body = json!({"model": "glm-5.3", "conversation_id": "sessZ", "messages": []});
+        let key = super::pool_session_key(&body).unwrap();
+        let r = resolve_target(&f.state, "glm-5.3", &body, None).unwrap();
+        assert_eq!(r.pool, TargetPool::Buddy);
+        assert!(
+            !f.state.pool_sticky.lock().unwrap().contains_key(&key),
+            "TTL=0 不得写入粘性绑定"
+        );
+        // 改成 trae 优先后同会话立即生效（未被粘性锁在 Buddy）
+        let mut p = policy_default();
+        p.strategy = DispatchStrategy::Priority;
+        p.priority = vec!["trae".into(), "buddy".into()];
+        crate::store::db(&f.dir).kv_set("dispatch_policy", &p).unwrap();
+        super::super::config_cache::invalidate(&f.dir, "dispatch_policy");
+        assert_eq!(
+            resolve_target(&f.state, "glm-5.3", &body, None).unwrap().pool,
+            TargetPool::Trae
+        );
+    }
+
+    /// 已存在的粘性绑定在 TTL 改为 0 后被清除（而非留 1 秒残影）
+    #[test]
+    fn t20c_pool_sticky_ttl_zero_clears_existing_binding() {
+        use std::sync::atomic::Ordering;
+        let f = fixture(&["glm-5.3"], Some(&["glm-5.3"]), Some(&policy_default()));
+        f.seed_healthy(true);
+        f.seed_healthy(false);
+        let body = json!({"model": "glm-5.3", "conversation_id": "sessY", "messages": []});
+        let key = super::pool_session_key(&body).unwrap();
+        assert_eq!(
+            resolve_target(&f.state, "glm-5.3", &body, None).unwrap().pool,
+            TargetPool::Buddy
+        );
+        assert!(
+            f.state.pool_sticky.lock().unwrap().contains_key(&key),
+            "默认 TTL 应写入绑定"
+        );
+        // TTL 热改为 0 后再解析：旧绑定被清除
+        f.state.wb_pool_sticky_ttl_secs.store(0, Ordering::Relaxed);
+        let _ = resolve_target(&f.state, "glm-5.3", &body, None).unwrap();
+        assert!(
+            !f.state.pool_sticky.lock().unwrap().contains_key(&key),
+            "TTL=0 应清除既有绑定"
+        );
+    }
+
+    /// 保留积分按池取值：池级覆盖优先、缺键回退全局、0 = 该池关闭过滤
+    #[test]
+    fn t20d_reserve_for_uses_pool_override() {
+        let mut p = DispatchPolicy::default();
+        assert_eq!(p.reserve_credits, 50.0, "全局默认 50");
+        // 未配置池 → 回退全局
+        assert_eq!(p.reserve_for("qoder"), 50.0);
+        // Qoder 单独关闭过滤，其余池不受影响
+        p.reserve_credits_by_pool.insert("qoder".into(), 0.0);
+        assert_eq!(p.reserve_for("qoder"), 0.0);
+        assert_eq!(p.reserve_for("trae"), 50.0);
+        // 池级自定义值生效
+        p.reserve_credits_by_pool.insert("buddy".into(), 5.0);
+        assert_eq!(p.reserve_for("buddy"), 5.0);
+        // 全局改为 0（关闭）时，未覆盖的池全部关闭，已覆盖的池保留自身值
+        p.reserve_credits = 0.0;
+        assert_eq!(p.reserve_for("trae"), 0.0);
+        assert_eq!(p.reserve_for("buddy"), 5.0);
+    }
+
+    /// 池级覆盖落盘往返：非法池名与负值被清洗，合法值原样保留
+    #[test]
+    fn t20e_reserve_by_pool_sanitized_on_load() {
+        let dir = std::env::temp_dir().join(format!("policy_pool_reserve_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).ok();
+        let mut p = DispatchPolicy::default();
+        p.reserve_credits_by_pool.insert("qoder".into(), 0.0);
+        p.reserve_credits_by_pool.insert("Buddy-AI".into(), 8.0);
+        p.reserve_credits_by_pool.insert("not_a_pool".into(), 99.0);
+        p.reserve_credits_by_pool.insert("trae".into(), -5.0);
+        crate::store::db(&dir).kv_set("dispatch_policy", &p).unwrap();
+        let loaded = super::load_policy(&dir);
+        // 非法池名被丢弃
+        assert!(!loaded.reserve_credits_by_pool.contains_key("not_a_pool"));
+        // 大小写/带空格形态归一为规范池名
+        assert_eq!(loaded.reserve_for("buddy-ai"), 8.0);
+        // 负值归零
+        assert_eq!(loaded.reserve_for("trae"), 0.0);
+        assert_eq!(loaded.reserve_for("qoder"), 0.0);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// 空消息体（无会话键）→ 不粘性，每请求按策略判定

@@ -195,15 +195,16 @@ pub async fn do_start(
     wb_pool.set_log_ctx(&state.data_dir, "buddy");
     qoder_pool.set_log_ctx(&state.data_dir, "qoder");
     buddy_ai_pool.set_log_ctx(&state.data_dir, "buddy-ai");
-    // 账号保留剩余积分（issue #91）：调度策略统一配置，启动时四池应用
-    //（credits=0 时无过滤；Qoder 池 credits 恒 None 不受影响，保持口径一致仍设置。
-    // M3 审查修复：buddy-ai 池补齐——原先冷启动漏设，调度策略保存前启动的服务
-    // 国际档不过滤低余额账号，与 dispatch_policy_set 热应用「四池即时生效」不一致）
-    let reserve_credits = crate::api_server::dispatch::load_policy(&state.data_dir).reserve_credits;
-    pool.set_reserve_credits(reserve_credits);
-    wb_pool.set_reserve_credits(reserve_credits);
-    qoder_pool.set_reserve_credits(reserve_credits);
-    buddy_ai_pool.set_reserve_credits(reserve_credits);
+    // 账号保留剩余积分（issue #91）：调度策略统一配置，启动时四池应用。
+    // 按池取值（DispatchPolicy::reserve_for）：池级覆盖优先、缺省回退全局——
+    // 各池积分量级不同（Qoder credits 常远低于 Trae 通用积分），统一阈值会把整池
+    // 踢出调度。credits=0 时无过滤，Qoder 池 credits 恒 None 亦不受影响。
+    // M3 审查修复：buddy-ai 池补齐——原先冷启动漏设。
+    let policy = crate::api_server::dispatch::load_policy(&state.data_dir);
+    pool.set_reserve_credits(policy.reserve_for("trae"));
+    wb_pool.set_reserve_credits(policy.reserve_for("buddy"));
+    qoder_pool.set_reserve_credits(policy.reserve_for("qoder"));
+    buddy_ai_pool.set_reserve_credits(policy.reserve_for("buddy-ai"));
     let (pool_count, wb_uids_len, wb_accounts_total, qoder_count) =
         apply_pool_snapshot(state, &pool, &wb_pool, &qoder_pool, &buddy_ai_pool);
 
@@ -1077,6 +1078,13 @@ fn load_pool_file_with_legacy_migration(raw: Option<String>) -> ApiPoolFile {
             pf.wb_pool_sticky_ttl_secs = old;
         }
     }
+    // v3.9.6：Qoder 会话粘性新默认（开）一次性迁移——旧版默认 false 会把
+    // `qoder_sticky_enabled: false` 显式落盘，与「用户主动关闭」无法区分；
+    // 用 qoder_sticky_default_on 标记区分，仅迁移一次（置位后尊重用户显式选择）
+    if !pf.qoder_sticky_default_on {
+        pf.qoder_sticky_enabled = true;
+        pf.qoder_sticky_default_on = true;
+    }
     pf
 }
 
@@ -1489,6 +1497,8 @@ fn merge_pool_set(
         qoder_hedge_threshold_ms: qoder_hedge_threshold_ms
             .unwrap_or(existing.qoder_hedge_threshold_ms),
         qoder_sticky_enabled: qoder_sticky_enabled.unwrap_or(existing.qoder_sticky_enabled),
+        // 迁移标记原样保留：用户一旦显式改过粘性开关，不再触发默认值迁移
+        qoder_sticky_default_on: existing.qoder_sticky_default_on,
         qoder_flash_free_rate: qoder_flash_free_rate.unwrap_or(existing.qoder_flash_free_rate),
         qoder_enabled_uids: qoder_uids.unwrap_or_else(|| existing.qoder_enabled_uids.clone()),
         qoder_group_ids: qoder_group_ids.unwrap_or_else(|| existing.qoder_group_ids.clone()),
@@ -2522,17 +2532,17 @@ pub fn dispatch_policy_set(
     policy: crate::api_server::dispatch::DispatchPolicy,
 ) -> Result<crate::api_server::dispatch::DispatchPolicy, String> {
     crate::api_server::dispatch::save_policy(&state.data_dir, &policy)?;
-    // 账号保留剩余积分（issue #91）热应用：保存后四池即时生效
+    // 账号保留剩余积分（issue #91）热应用：保存后四池即时生效，按池取值
     //（配置锁外，与 pool_set 热应用同模式；负值由 set_reserve_credits 防御归零）
     if let Some(rt) = safe_lock(&runtime).as_ref() {
-        rt.shared.pool.set_reserve_credits(policy.reserve_credits);
-        rt.shared.wb_pool.set_reserve_credits(policy.reserve_credits);
+        rt.shared.pool.set_reserve_credits(policy.reserve_for("trae"));
+        rt.shared.wb_pool.set_reserve_credits(policy.reserve_for("buddy"));
         rt.shared
             .qoder_pool
-            .set_reserve_credits(policy.reserve_credits);
+            .set_reserve_credits(policy.reserve_for("qoder"));
         rt.shared
             .buddy_ai_pool
-            .set_reserve_credits(policy.reserve_credits);
+            .set_reserve_credits(policy.reserve_for("buddy-ai"));
     }
     Ok(crate::api_server::dispatch::load_policy(&state.data_dir))
 }
@@ -2863,6 +2873,26 @@ mod legacy_migration_tests {
         let pf = load_pool_file_with_legacy_migration(Some(raw.into()));
         assert_eq!(pf.wb_account_concurrency_limit, u32::MAX);
     }
+
+    /// v3.9.6：Qoder 会话粘性新默认（开）一次性迁移
+    #[test]
+    fn qoder_sticky_defaults_on_and_migrates_once() {
+        // 旧配置：旧默认把 false 显式落盘，无迁移标记 → 迁移为开并置位标记
+        let raw = r#"{ "qoder_sticky_enabled": false }"#;
+        let pf = load_pool_file_with_legacy_migration(Some(raw.into()));
+        assert!(pf.qoder_sticky_enabled, "旧默认 false 应被迁移为开");
+        assert!(pf.qoder_sticky_default_on, "迁移后应置位标记");
+
+        // 已迁移 + 用户主动关闭 → 尊重用户选择，不再强制开
+        let raw2 = r#"{ "qoder_sticky_enabled": false, "qoder_sticky_default_on": true }"#;
+        let pf2 = load_pool_file_with_legacy_migration(Some(raw2.into()));
+        assert!(!pf2.qoder_sticky_enabled, "用户显式关闭不得被迁移覆盖");
+
+        // 全新配置（无记录）→ 默认开且已标记
+        let fresh = load_pool_file_with_legacy_migration(None);
+        assert!(fresh.qoder_sticky_enabled);
+        assert!(fresh.qoder_sticky_default_on);
+    }
 }
 
 #[cfg(test)]
@@ -2896,6 +2926,8 @@ mod pool_merge_tests {
             qoder_enabled: true,
             qoder_hedge_threshold_ms: 4000,
             qoder_sticky_enabled: true,
+            // 已迁移（显式 true 组合原样保留，验证「未传字段保留原值」）
+            qoder_sticky_default_on: true,
             qoder_flash_free_rate: true,
             qoder_account_concurrency_limit: 3,
             qoder_pool_sticky_ttl_secs: 900,

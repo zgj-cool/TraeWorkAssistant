@@ -657,6 +657,10 @@ export interface ApiLogEntry {
   ttfbMs?: number | null;
   /** custom 池阶段标记 */
   stage?: string | null;
+  /** 上游实扣积分（Qoder 池终局行；未下发 usage 或缺省 = 无测量） */
+  credits?: number | null;
+  /** 上游计费原值（峰谷折扣前）；与 credits 同时有值，差额即折扣额 */
+  originalCredits?: number | null;
   /** 失败原因（落行管线既有脱敏口径） */
   error?: string | null;
 }
@@ -751,8 +755,12 @@ export interface DispatchPolicy {
   fallback: boolean;
   /** /v1/models 为多源同名模型附带池前缀别名条目（trae/xxx 等，issue #90 修复③a）；默认关 */
   model_source_labels: boolean;
-  /** 账号保留剩余积分（issue #91）：剩余 ≤ 该值的账号暂停调度（0 = 关闭），默认 50 */
+  /** 账号保留剩余积分（issue #91）：剩余 ≤ 该值的账号暂停调度（0 = 关闭），默认 50。
+   *  作为未单独配置的池的兜底值（池级覆盖见 reserve_credits_by_pool） */
   reserve_credits: number;
+  /** 按池的保留积分覆盖（池名 trae/buddy/buddy-ai/qoder/custom → 阈值）；
+   *  缺键 = 沿用 reserve_credits；0 = 该池关闭该过滤 */
+  reserve_credits_by_pool?: Record<string, number>;
   updated_at: number;
 }
 
@@ -920,8 +928,10 @@ export interface ApiPoolFile {
   qoder_enabled?: boolean;
   /** Qoder 竞速对冲阈值毫秒（F-80-余 v2）：首字节超阈值向第二账号发对冲请求；0 = 关闭 */
   qoder_hedge_threshold_ms?: number;
-  /** Qoder 会话粘性开关（F-80-余 v2）：同会话 TTL 内绑定同一 Qoder 账号（默认关） */
+  /** Qoder 会话粘性开关（F-80-余 v2）：同会话 TTL 内绑定同一 Qoder 账号（默认开） */
   qoder_sticky_enabled?: boolean;
+  /** Qoder 会话粘性「新默认」迁移标记（v3.9.6 一次性；后端维护，前端只读） */
+  qoder_sticky_default_on?: boolean;
   /** 免费活动模型倍率覆盖（issue #111/#156，默认开）：Qwen3.8-Flash / DeepSeek-Flash 目录倍率按 0 处理 + 取号豁免零积分过滤 */
   qoder_flash_free_rate?: boolean;
   /** Qoder 池账号并发上限（per-pool 三参数之一，默认 1；0 = 不限） */
@@ -963,6 +973,8 @@ export interface UsageCounterView {
   errors: number;
   /** 网关测量的累计消耗积分（issue #82 T2.4：仅 Qoder 桶 models 非零） */
   credits: number;
+  /** 上游计费原值（峰谷折扣前）；0 = 无测量（老后端缺省视为 0） */
+  original_credits?: number;
 }
 
 /** 按 Key 的 token 用量 */

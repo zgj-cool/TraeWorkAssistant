@@ -157,7 +157,7 @@ impl ApiLogger {
         acct_name: &str,
         error: Option<&str>,
     ) {
-        self.log_request_inner(pool, method, path, model, stream, status, uid, duration_ms, None, key_name, acct_name, error, None)
+        self.log_request_inner(pool, method, path, model, stream, status, uid, duration_ms, None, key_name, acct_name, error, None, None, None)
     }
 
     /// 记录一条 API 请求日志（流式请求带 TTFB 首字耗时字段）
@@ -178,7 +178,35 @@ impl ApiLogger {
         acct_name: &str,
         error: Option<&str>,
     ) {
-        self.log_request_inner(pool, method, path, model, stream, status, uid, duration_ms, ttfb_ms, key_name, acct_name, error, None)
+        self.log_request_inner(pool, method, path, model, stream, status, uid, duration_ms, ttfb_ms, key_name, acct_name, error, None, None, None)
+    }
+
+    /// 记录一条 API 请求日志（带上游积分双口径，Qoder 池用）：
+    /// `credits` = 上游实扣积分；`original_credits` = 峰谷折扣前原价（均 Option，
+    /// None 不输出该字段，旧格式兼容）。仅在实际拿到上游 usage 的终局行记录，
+    /// 调度早退/上游未下发 usage 的行不带该字段（不伪造）。
+    #[allow(clippy::too_many_arguments)]
+    pub fn log_request_billing(
+        &self,
+        pool: &str,
+        method: &str,
+        path: &str,
+        model: &str,
+        stream: bool,
+        status: u16,
+        uid: &str,
+        duration_ms: u64,
+        ttfb_ms: Option<u64>,
+        key_name: &str,
+        acct_name: &str,
+        error: Option<&str>,
+        credits: Option<f64>,
+        original_credits: Option<f64>,
+    ) {
+        self.log_request_inner(
+            pool, method, path, model, stream, status, uid, duration_ms, ttfb_ms,
+            key_name, acct_name, error, None, credits, original_credits,
+        )
     }
 
     /// 记录一条 API 请求日志（附请求阶段字段，issue #149 P1，custom 池用）：
@@ -199,7 +227,7 @@ impl ApiLogger {
         stage: Option<&str>,
         error: Option<&str>,
     ) {
-        self.log_request_inner(pool, method, path, model, stream, status, uid, duration_ms, None, key_name, acct_name, error, stage)
+        self.log_request_inner(pool, method, path, model, stream, status, uid, duration_ms, None, key_name, acct_name, error, stage, None, None)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -218,6 +246,8 @@ impl ApiLogger {
         acct_name: &str,
         error: Option<&str>,
         stage: Option<&str>,
+        credits: Option<f64>,
+        original_credits: Option<f64>,
     ) {
         let (h, m, s) = Self::local_hms();
 
@@ -238,15 +268,26 @@ impl ApiLogger {
             Some(e) => format!(" error={}", sanitize_log_value(e)),
             None => String::new(),
         };
+        // 积分双口径（Qoder 池终局行）：四位小数钳制防 f64 Display 长出
+        // 浮点尾数（0.30000000000000004）撑长日志行；缺值不输出字段
+        let credit_part = match credits {
+            Some(c) => format!(" credits={}", round_credit(c)),
+            None => String::new(),
+        };
+        let original_credit_part = match original_credits {
+            Some(o) => format!(" orig_credits={}", round_credit(o)),
+            None => String::new(),
+        };
         // 空名称（匿名 Key / 无可用账号）统一显示 "-"，保持字段可检索
         let key_disp = if key_name.is_empty() { "-".to_string() } else { sanitize_log_value(key_name) };
         let acct_disp = if acct_name.is_empty() { "-".to_string() } else { sanitize_log_value(acct_name) };
         let model = sanitize_log_value(model);
 
         let line = format!(
-            "[{:02}:{:02}:{:02}] {} {} key={} pool={} model={} acct={} uid={} stream={} status={} {}ms{}{}{}\n",
+            "[{:02}:{:02}:{:02}] {} {} key={} pool={} model={} acct={} uid={} stream={} status={} {}ms{}{}{}{}{}\n",
             h, m, s,
-            method, path, key_disp, pool, model, acct_disp, uid_short, stream, status, duration_ms, ttfb_part, stage_part, err_part,
+            method, path, key_disp, pool, model, acct_disp, uid_short, stream, status, duration_ms,
+            ttfb_part, stage_part, credit_part, original_credit_part, err_part,
         );
 
         self.enqueue(line);
@@ -576,6 +617,10 @@ pub struct ApiLogEntry {
     pub ttfb_ms: Option<u64>,
     /// custom 池阶段标记
     pub stage: Option<String>,
+    /// 上游实扣积分（Qoder 池终局行；上游未下发 usage 时为 None，不伪造）
+    pub credits: Option<f64>,
+    /// 上游计费原值（峰谷折扣前）；与 credits 同时下发，差额即该请求折扣额
+    pub original_credits: Option<f64>,
     /// 失败原因（既有管线脱敏口径，原样透出）
     pub error: Option<String>,
 }
@@ -595,10 +640,11 @@ const PARSE_TOKENS: [&str; 8] = [
 ];
 
 /// 全量解析/行级锚（B-7/M-3 清洗依据）：PARSE_TOKENS 的 8 个空格前缀字段锚
-/// + ttfb/stage 2 个空格前缀字段锚 + [DEBUG]/[SCHED] 2 个行级块锚（无前缀空格）
-const LOG_PARSE_TOKENS: [&str; 12] = [
+/// + ttfb/stage 2 个空格前缀字段锚 + 积分双字段 credits/orig_credits 2 个空格前缀锚
+/// + [DEBUG]/[SCHED] 2 个行级块锚（无前缀空格）
+const LOG_PARSE_TOKENS: [&str; 14] = [
     " key=", " pool=", " model=", " acct=", " uid=", " stream=", " status=", " error=",
-    " ttfb=", " stage=", "[DEBUG]", "[SCHED]",
+    " ttfb=", " stage=", " credits=", " orig_credits=", "[DEBUG]", "[SCHED]",
 ];
 
 /// 清洗用户可控值（key 名/账号名/模型名/错误消息/uid/日志正文）中与解析锚冲突的
@@ -606,6 +652,24 @@ const LOG_PARSE_TOKENS: [&str; 12] = [
 ///（" key=" → "\u{200B}key="）；行级锚 "[DEBUG]"/"[SCHED]" 在 "[" 之后插 ZWSP
 ///（"[\u{200B}DEBUG]"），保留 [ 完整形态。写侧清洗后读侧 parse_log_line 不再
 /// 误锚/误排除，故 parse_log_line 本体无需改动。
+/// 积分落行精度：四位小数（f64 Display 可能产出 0.30000000000000004 类长尾数，
+/// 拉长日志行且难读；四位足以覆盖上游 0.0001 级倍率精度）
+fn round_credit(v: f64) -> f64 {
+    if !v.is_finite() {
+        return 0.0;
+    }
+    (v * 10_000.0).round() / 10_000.0
+}
+
+/// 从行尾剩余文本中取积分字段值（缺字段/非法值/负值 → None，读侧宽容）
+fn parse_credit_field(tail: &str, anchor: &str) -> Option<f64> {
+    tail.split(anchor)
+        .nth(1)
+        .and_then(|s| s.split_whitespace().next())
+        .and_then(|v| v.parse::<f64>().ok())
+        .filter(|v| v.is_finite() && *v >= 0.0)
+}
+
 fn sanitize_log_value(v: &str) -> String {
     let mut s = v.to_string();
     for tok in LOG_PARSE_TOKENS.iter() {
@@ -714,6 +778,9 @@ pub fn parse_log_line(line: &str, date: &str) -> Option<ApiLogEntry> {
         .nth(1)
         .map(|s| s.split_whitespace().next().unwrap_or("").to_string())
         .filter(|s| !s.is_empty());
+    // 积分双口径（Qoder 池才有）：旧日志行无该字段 → None（读取侧保持兼容）
+    let credits = parse_credit_field(tail_raw, " credits=");
+    let original_credits = parse_credit_field(tail_raw, " orig_credits=");
 
     Some(ApiLogEntry {
         date: date.to_string(),
@@ -730,6 +797,8 @@ pub fn parse_log_line(line: &str, date: &str) -> Option<ApiLogEntry> {
         duration_ms,
         ttfb_ms,
         stage,
+        credits,
+        original_credits,
         error,
     })
 }
@@ -962,6 +1031,35 @@ mod tests {
         assert_eq!(e.ttfb_ms, Some(812));
         assert!(e.stage.is_none());
         assert!(e.error.is_none());
+        // 旧格式行无积分字段 → None（读侧兼容）
+        assert!(e.credits.is_none());
+        assert!(e.original_credits.is_none());
+    }
+
+    /// 积分双口径行解析（Qoder 池终局行）：credits / orig_credits 与 error 共存
+    #[test]
+    fn parse_log_line_with_billing_fields() {
+        let line = "[09:30:01] POST /v1/chat/completions key=k1 pool=qoder model=Qwen3.8-Max acct=甲 uid=abcdef123456 stream=true status=200 1200ms ttfb=800ms credits=3.2 orig_credits=6.4";
+        let e = parse_log_line(line, "2026-11-22").expect("应解析成功");
+        assert_eq!(e.credits, Some(3.2));
+        assert_eq!(e.original_credits, Some(6.4));
+        assert!(e.error.is_none());
+
+        // 失败行：积分字段在 error 之前，error 仍取到行尾
+        let fail = "[09:30:02] POST /v1/chat/completions key=k1 pool=qoder model=M acct=甲 uid=abcdef123456 stream=true status=200 900ms credits=1.5 orig_credits=3 error=上游中断";
+        let e2 = parse_log_line(fail, "2026-11-22").expect("应解析成功");
+        assert_eq!(e2.credits, Some(1.5));
+        assert_eq!(e2.original_credits, Some(3.0));
+        assert_eq!(e2.error.as_deref(), Some("上游中断"));
+    }
+
+    /// 落行精度钳制：f64 长尾数收敛到四位小数，负值/NaN 归零
+    #[test]
+    fn round_credit_clamps_float_tail() {
+        assert_eq!(round_credit(0.1 + 0.2), 0.3);
+        assert_eq!(round_credit(3.0), 3.0);
+        assert_eq!(round_credit(-1.0), -1.0);
+        assert_eq!(round_credit(f64::NAN), 0.0);
     }
 
     /// F-84：失败行（stage + error 含空格与 token 字样）与非请求行跳过

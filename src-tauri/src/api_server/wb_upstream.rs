@@ -28,6 +28,9 @@ pub const WB_CLI_VERSION: &str = "2.63.2";
 pub const WB_REFRESH_URL: &str = "https://www.codebuddy.cn/v2/plugin/auth/token/refresh";
 /// 首字超时（F-34）：上游建连后 10s 内未产出任何字节 → 故障转移
 pub const FIRST_BYTE_TIMEOUT: Duration = Duration::from_secs(10);
+/// 竞速对冲阈值上限（毫秒）：须早于 FIRST_BYTE_TIMEOUT 留出竞速窗口，
+/// 否则阈值到点前主请求自己已超时失败，对冲永不触发。与配置页输入上限一致。
+pub const HEDGE_DELAY_MS_MAX: u64 = 8_000;
 
 /// 动态客户端指纹（issue #123）：UA/X-IDE-Version 从本机已安装客户端解析，
 /// 解析失败回落编译期常量（零行为变化）。每进程每区域仅解析一次。
@@ -533,8 +536,11 @@ pub struct RaceOutcome<T> {
 /// 请求，先出首字者胜、另一侧 reader 被 Drop（连接关闭，被取消一侧不计 usage）。
 /// 主请求仍受原 FIRST_BYTE_TIMEOUT 约束（从发起计），对冲请求自带完整首字窗口。
 ///
-/// `hedge_delay_ms` 收敛到 [1s, 8s]：保证首字超时（10s）前留出竞速窗口，
-/// 过小会对亚秒抖动误触发，过大则永远轮不到对冲。
+/// `hedge_delay_ms` 只钳**上限**（`HEDGE_DELAY_MS_MAX`）：超过首字超时（10s）的
+/// 阈值永远轮不到对冲，属无效配置；下限不再静默抬高——调用方已把 0 判为「关闭」
+/// 走纯首字超时路径，其余取值按用户原样生效（审查修复：旧实现 `clamp(1000, 8000)`
+/// 把 1–999ms 静默改成 1s，配置页显示与实际行为不一致）。
+/// 过小阈值会频繁触发双发（对冲账号多消耗一次请求），由 UI 提示建议区间承担。
 ///
 /// 计数配对保证（F-77）：`spawn_backup` 返回的 `T`（计数租约）在所有退出路径
 /// 恰好释放一次——未触发/无对冲账号（闭包返回 None，租约由闭包自释放）、
@@ -548,7 +554,10 @@ pub fn lines_with_first_byte_hedged<T>(
     use std::time::Instant;
 
     const POLL: Duration = Duration::from_millis(20);
-    let hedge_delay = Duration::from_millis(hedge_delay_ms.clamp(1000, 8000));
+    // 只钳上限：0 已由调用方判为「关闭」，1–999ms 按用户配置原样生效（旧实现
+    // clamp(1000, 8000) 把下限静默抬到 1s，配置页显示与实际行为不一致）；
+    // 上限须早于 FIRST_BYTE_TIMEOUT，否则阈值到点前主请求已超时、对冲永不触发
+    let hedge_delay = Duration::from_millis(hedge_delay_ms.min(HEDGE_DELAY_MS_MAX));
     let started = Instant::now();
     let (tx1, rx1) = std::sync::mpsc::channel::<std::io::Result<String>>();
     relay_lines(primary, tx1);
@@ -1441,6 +1450,33 @@ mod tests {
         assert!(out.hedge.is_none());
         assert!(!out.takeover);
         assert_eq!(collect(out.lines), vec!["data: a".to_string(), "data: b".to_string()]);
+    }
+
+    /// 下限不再静默抬高（审查修复）：阈值 300ms + 主请求 600ms 无首字 →
+    /// 应在 300ms 就发起对冲（旧实现 clamp 到 1s，此场景不会触发对冲）
+    #[test]
+    fn hedge_sub_second_threshold_is_respected() {
+        let out: RaceOutcome<&str> = lines_with_first_byte_hedged(
+            Box::new(DelayedRead::new(600, "data: slow\n")),
+            300,
+            || Some((Box::new(DelayedRead::new(0, "data: fast\n")), "hedge-uid")),
+        )
+        .unwrap();
+        assert!(out.takeover, "300ms 阈值应触发对冲接管");
+        assert_eq!(out.hedge, Some("hedge-uid"));
+    }
+
+    /// 上限钳制：阈值超过 HEDGE_DELAY_MS_MAX 时按上限计（不会等到首字超时才动）
+    #[test]
+    fn hedge_threshold_clamped_to_max() {
+        // 主请求 8.4s 出首字：阈值给 20s，钳到 8s → 8s 时应已发起对冲并接管
+        let out: RaceOutcome<&str> = lines_with_first_byte_hedged(
+            Box::new(DelayedRead::new(8400, "data: slow\n")),
+            20_000,
+            || Some((Box::new(DelayedRead::new(0, "data: fast\n")), "hedge-uid")),
+        )
+        .unwrap();
+        assert!(out.takeover, "超上限阈值应钳到 {}ms 后触发对冲", HEDGE_DELAY_MS_MAX);
     }
 
     #[test]

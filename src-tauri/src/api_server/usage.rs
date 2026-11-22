@@ -156,6 +156,10 @@ pub struct DayStats {
     /// 按模型的积分测量（issue #82 T2.4：仅 Qoder 桶非零，供积分页模型排行）
     #[serde(default)]
     pub model_credits: HashMap<String, f64>,
+    /// 按模型的上游计费原值（峰谷折扣前，与 model_credits 同键空间）：
+    /// 供模型排行展示「实扣 / 折前」双口径，差额即该模型的折扣额
+    #[serde(default)]
+    pub model_original_credits: HashMap<String, f64>,
 }
 
 impl DayStats {
@@ -218,15 +222,21 @@ impl DayStats {
     /// 负值防御性截断为 0；有值时按模型累加（T2.4 模型粒度排行数据源）。
     /// 截断后为 0 的值不入模型榜（负值防御 + 上游真实 0 消耗都不产生 0 值假条目）。
     pub fn record_credits(&mut self, model: &str, credits: Option<f64>, original: Option<f64>) {
+        let model_key = bucket_key(model);
         if let Some(c) = credits {
             let c = c.max(0.0);
             self.credits += c;
             if c > 0.0 {
-                *self.model_credits.entry(bucket_key(model)).or_default() += c;
+                *self.model_credits.entry(model_key.clone()).or_default() += c;
             }
         }
         if let Some(o) = original {
-            self.original_credits += o.max(0.0);
+            let o = o.max(0.0);
+            self.original_credits += o;
+            if o > 0.0 {
+                // 原价按同一模型键落桶：模型排行可展示「实扣 / 折前」双口径
+                *self.model_original_credits.entry(model_key).or_default() += o;
+            }
         }
     }
 
@@ -539,6 +549,8 @@ pub struct CounterView {
     pub errors: u64,
     /// 网关测量的累计消耗积分（issue #82 T2.4：仅 Qoder 桶 models 非零）
     pub credits: f64,
+    /// 上游计费原值（峰谷折扣前）；0 = 无测量（非 Qoder 桶 / 上游未下发）
+    pub original_credits: f64,
 }
 
 /// 按 Key 的 token 用量视图
@@ -622,25 +634,42 @@ impl UsageDayView {
         let mut models: Vec<CounterView> = d
             .models
             .iter()
-            .map(|(k, c)| view(k, c, d.model_credits.get(k).copied().unwrap_or(0.0)))
+            .map(|(k, c)| {
+                view(
+                    k,
+                    c,
+                    d.model_credits.get(k).copied().unwrap_or(0.0),
+                    d.model_original_credits.get(k).copied().unwrap_or(0.0),
+                )
+            })
             .collect();
         // 仅记积分、无请求计数的模型（record_credits_qoder 不写 models 计数）也并入视图，
-        // 前端模型粒度积分才能取到（issue #82 T2.4）
-        for (k, credits) in &d.model_credits {
-            if !d.models.contains_key(k) {
-                models.push(CounterView {
-                    name: k.clone(),
-                    requests: 0,
-                    ok: 0,
-                    errors: 0,
-                    credits: *credits,
-                });
-            }
+        // 前端模型粒度积分才能取到（issue #82 T2.4）；两个积分桶取键并集，
+        // 防「只有原价无实扣」的条目丢失（折扣对账时折前值需要有落点）
+        let mut credit_only: Vec<&String> = d
+            .model_credits
+            .keys()
+            .chain(d.model_original_credits.keys())
+            .filter(|k| !d.models.contains_key(*k))
+            .collect();
+        credit_only.sort();
+        credit_only.dedup();
+        for k in credit_only {
+            models.push(CounterView {
+                name: k.clone(),
+                requests: 0,
+                ok: 0,
+                errors: 0,
+                credits: d.model_credits.get(k).copied().unwrap_or(0.0),
+                original_credits: d.model_original_credits.get(k).copied().unwrap_or(0.0),
+            });
         }
         models.sort_by(|a, b| b.requests.cmp(&a.requests).then(a.name.cmp(&b.name)));
-        let mut accounts: Vec<CounterView> = d.accounts.iter().map(|(k, c)| view(k, c, 0.0)).collect();
+        let mut accounts: Vec<CounterView> =
+            d.accounts.iter().map(|(k, c)| view(k, c, 0.0, 0.0)).collect();
         accounts.sort_by(|a, b| b.requests.cmp(&a.requests).then(a.name.cmp(&b.name)));
-        let mut keys: Vec<CounterView> = d.keys.iter().map(|(k, c)| view(k, c, 0.0)).collect();
+        let mut keys: Vec<CounterView> =
+            d.keys.iter().map(|(k, c)| view(k, c, 0.0, 0.0)).collect();
         keys.sort_by(|a, b| b.requests.cmp(&a.requests).then(a.name.cmp(&b.name)));
         let mut key_tokens: Vec<KeyTokenView> = d
             .key_tokens
@@ -712,13 +741,14 @@ impl UsageDayView {
     }
 }
 
-fn view(name: &str, c: &Counter, credits: f64) -> CounterView {
+fn view(name: &str, c: &Counter, credits: f64, original_credits: f64) -> CounterView {
     CounterView {
         name: name.to_string(),
         requests: c.requests,
         ok: c.ok,
         errors: c.errors,
         credits,
+        original_credits,
     }
 }
 
@@ -802,10 +832,37 @@ mod tests {
         assert!((d.original_credits - 8.0).abs() < 1e-9, "original_credits = 3.0+5.0（None/负值不入账）");
         assert!((d.model_credits.get("m1").copied().unwrap_or(0.0) - 4.0).abs() < 1e-9);
         assert!((d.model_credits.get("m2").copied().unwrap_or(0.0) - 4.0).abs() < 1e-9);
-        // 视图层：models[].credits 透出模型粒度积分
+        // 折前原价按同一模型键落桶：m1 只有一次带原价（3.0），m2 = 5.0（负值截断不入账）
+        assert!((d.model_original_credits.get("m1").copied().unwrap_or(0.0) - 3.0).abs() < 1e-9);
+        assert!((d.model_original_credits.get("m2").copied().unwrap_or(0.0) - 5.0).abs() < 1e-9);
+        // 视图层：models[].credits / original_credits 透出模型粒度双口径
         let v = UsageDayView::from_day(&day, d);
         let m1 = v.models.iter().find(|m| m.name == "m1").expect("m1 应在视图");
         assert!((m1.credits - 4.0).abs() < 1e-9);
+        assert!((m1.original_credits - 3.0).abs() < 1e-9, "折前原价同模型透出");
+        let m2 = v.models.iter().find(|m| m.name == "m2").expect("m2 应在视图");
+        assert!((m2.credits - 4.0).abs() < 1e-9);
+        assert!((m2.original_credits - 5.0).abs() < 1e-9);
+    }
+
+    /// 只有折前原价、没有实扣的模型（上游只下发 original_credits 的异常形态）
+    /// 也必须并入模型视图——否则折扣对账时该条目的原价凭空消失
+    #[test]
+    fn record_credits_original_only_model_still_in_view() {
+        let mut f = UsageFile::default();
+        let day = today_key();
+        f.record_credits_qoder("only_orig", &day, None, Some(6.0));
+        let d = f.qoder_days.get(&day).expect("当日统计应存在");
+        assert!((d.credits - 0.0).abs() < 1e-9, "无实扣不产生实扣值");
+        let v = UsageDayView::from_day(&day, d);
+        let m = v
+            .models
+            .iter()
+            .find(|m| m.name == "only_orig")
+            .expect("仅原价模型也应在视图");
+        assert_eq!(m.requests, 0);
+        assert!((m.credits - 0.0).abs() < 1e-9);
+        assert!((m.original_credits - 6.0).abs() < 1e-9);
     }
 
     #[test]

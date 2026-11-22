@@ -1296,10 +1296,11 @@ pub(crate) fn run_qoder_stream(
                                             pt, ct, Some(ttfb_ms), credits, original_credits,
                                             &session_ctx_from_ids(&peek, win_session_ids.as_ref()),
                                         );
-                                        state.logger.log_request_ttfb(
+                                        state.logger.log_request_billing(
                                             "qoder", "POST", "/v1/chat/completions", model, true,
                                             200, &win_uid, duration_ms, Some(ttfb_ms), &key_name,
                                             &state.qoder_pool.name_of(&win_uid), Some(&msg),
+                                            credits, original_credits,
                                         );
                                         return;
                                     }
@@ -1423,10 +1424,11 @@ pub(crate) fn run_qoder_stream(
                                 original_credits,
                                 &session_ctx_from_ids(&peek, win_session_ids.as_ref()),
                             );
-                            state.logger.log_request_ttfb(
+                            state.logger.log_request_billing(
                                 "qoder", "POST", "/v1/chat/completions", model, true, 200,
                                 &win_uid, duration_ms, Some(ttfb_ms), &key_name,
                                 &state.qoder_pool.name_of(&win_uid), Some(&msg),
+                                credits, original_credits,
                             );
                             return; // 已有数据流出：就地收尾
                         }
@@ -1455,11 +1457,12 @@ pub(crate) fn run_qoder_stream(
                                     pt, ct, Some(ttfb_ms), credits, original_credits,
                                     &session_ctx_from_ids(&peek, win_session_ids.as_ref()),
                                 );
-                                state.logger.log_request_ttfb(
+                                state.logger.log_request_billing(
                                     "qoder", "POST", "/v1/chat/completions", model, true, 200,
                                     &win_uid, duration_ms, Some(ttfb_ms), &key_name,
                                     &state.qoder_pool.name_of(&win_uid),
                                     Some("传输层掐断（内容已流出）→ 就地收尾落账失败"),
+                                    credits, original_credits,
                                 );
                                 return;
                             }
@@ -1491,10 +1494,11 @@ pub(crate) fn run_qoder_stream(
                                 state.qoder_sticky.bind(&sticky_key, &win_uid, &sticky_seed, now_ts());
                                 state.qoder_sticky.save(&state.data_dir);
                             }
-                            state.logger.log_request_ttfb(
+                            state.logger.log_request_billing(
                                 "qoder", "POST", "/v1/chat/completions", model, true, 200,
                                 &win_uid, duration_ms, Some(ttfb_ms), &key_name,
                                 &state.qoder_pool.name_of(&win_uid), None,
+                                credits, original_credits,
                             );
                             return;
                         }
@@ -2075,10 +2079,11 @@ pub async fn qoder_aggregate_chat(
                                     state.qoder_sticky.bind(&sticky_key, &win_uid, &sticky_seed, now_ts());
                                     state.qoder_sticky.save(&state.data_dir);
                                 }
-                                state.logger.log_request_ttfb(
+                                state.logger.log_request_billing(
                                     "qoder", "POST", "/v1/chat/completions", &model, stream, 200,
                                     &win_uid, duration_ms, Some(ttfb_ms), &key_name,
                                     &state.qoder_pool.name_of(&win_uid), None,
+                                    credits, original_credits,
                                 );
                                 return Ok(r);
                             }

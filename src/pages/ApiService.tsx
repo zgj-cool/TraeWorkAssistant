@@ -913,7 +913,8 @@ export default function ApiService() {
                         </span>
                         <span className="block text-[11px] leading-4 text-slate-400 dark:text-zinc-500">
                           流式首字节超过该时长即向第二账号发对冲请求，先出首字者胜；
-                          0 = 关闭（有效范围 1s–8s，与后端对齐）
+                          0 = 关闭（上限 8s，更长的阈值等不到对冲；小于 1s 会频繁双发、
+                          第二账号多消耗一次积分）
                         </span>
                       </span>
                       <span className="flex shrink-0 items-center gap-1.5">

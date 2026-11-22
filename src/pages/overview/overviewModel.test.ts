@@ -280,6 +280,52 @@ describe('summarizeCreditUsage', () => {
     ]);
   });
 
+  it('Qoder 当日签到导致余额逆差时，消耗按「前日 + 签到 − 当日」计算（不再恒 0）', () => {
+    // 线上真实形态：每天签到 +100，余额从 1270 涨到 1353，纯差分会是负数被钳 0
+    const data = emptyData();
+    data.qoderAccounts = [{ id: 'q1', nickname: 'Qoder甲' }] as QoderAccountView[];
+    data.qoderSnapshots = [
+      { date: '2026-11-18', ts: 0, total_balance: 1270, accounts: [{ user_id: 'q1', total: 1270 }] },
+      { date: '2026-11-19', ts: 0, total_balance: 1353, accounts: [{ user_id: 'q1', total: 1353 }] },
+    ];
+    data.qoderCheckin = [
+      { date: '2026-11-19', time: '00:10:00', user_id: 'q1', name: 'Qoder甲', status: 'success', message: '', reward: 100 },
+    ];
+
+    const s = summarizeCreditUsage(data, NOW);
+    const row = s.rows.find((r) => r.platform === 'qoder');
+    // 1270 + 100 − 1353 = 17（修正前：1270 − 1353 = −83 → 钳 0，明细恒 0）
+    expect(row?.credits).toBe(17);
+    expect(row?.source).toContain('+100');
+  });
+
+  it('Qoder 签到奖励取 campaigns 明细优先（与获得积分口径一致）', () => {
+    const data = emptyData();
+    data.qoderAccounts = [{ id: 'q1', nickname: 'Qoder甲' }] as QoderAccountView[];
+    data.qoderSnapshots = [
+      { date: '2026-11-18', ts: 0, total_balance: 1000, accounts: [{ user_id: 'q1', total: 1000 }] },
+      { date: '2026-11-19', ts: 0, total_balance: 1080, accounts: [{ user_id: 'q1', total: 1080 }] },
+    ];
+    data.qoderCheckin = [
+      {
+        date: '2026-11-19',
+        time: '00:10:00',
+        user_id: 'q1',
+        name: 'Qoder甲',
+        status: 'success',
+        message: '',
+        // reward 与 campaigns 并存时以明细为准（防合计字段含重复项）
+        reward: 999,
+        campaigns: [{ id: 'c1', name: '每日登录', kind: 'daily', reward: 60 }, { id: 'c2', name: '额外', reward: 20 }],
+      },
+    ];
+
+    const s = summarizeCreditUsage(data, NOW);
+    // 1000 + 80 − 1080 = 0（余额净增 80 全部来自签到，无消耗）
+    expect(s.rows.find((r) => r.platform === 'qoder')?.credits).toBe(0);
+    expect(s.rows.find((r) => r.platform === 'qoder')?.source).toContain('+80');
+  });
+
   it('无账号级数据时列出账号但 credits=null，合计为 null', () => {
     const data = emptyData();
     data.traeAccounts = [{ user_id: 't1', name: 'Trae甲' }] as AccountView[];

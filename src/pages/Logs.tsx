@@ -614,14 +614,21 @@ function ApiRecentRequests() {
         <table className="w-full table-fixed text-left text-xs">
           <thead className="sticky top-0 z-10 bg-slate-50 text-[11.5px] font-medium text-slate-500 dark:bg-zinc-900 dark:text-zinc-400">
             <tr className="border-b border-slate-200/70 dark:border-zinc-700/70">
-              <th className="w-[13%] px-2 py-2 font-medium">时间</th>
-              <th className="w-[19%] px-2 py-2 font-medium">端点</th>
-              <th className="w-[14%] px-2 py-2 font-medium">模型</th>
-              <th className="w-[9%] px-2 py-2 font-medium">池</th>
-              <th className="w-[12%] px-2 py-2 font-medium">账号</th>
-              <th className="w-[7%] px-2 py-2 text-center font-medium">状态</th>
-              <th className="w-[8%] px-2 py-2 text-right font-medium">耗时</th>
-              <th className="w-[8%] px-2 py-2 text-right font-medium">TTFT</th>
+              <th className="w-[12%] px-2 py-2 font-medium">时间</th>
+              <th className="w-[17%] px-2 py-2 font-medium">端点</th>
+              <th className="w-[13%] px-2 py-2 font-medium">模型</th>
+              <th className="w-[8%] px-2 py-2 font-medium">池</th>
+              <th className="w-[11%] px-2 py-2 font-medium">账号</th>
+              <th className="w-[6%] px-2 py-2 text-center font-medium">状态</th>
+              <th className="w-[7%] px-2 py-2 text-right font-medium">耗时</th>
+              <th className="w-[7%] px-2 py-2 text-right font-medium">TTFT</th>
+              {/* 积分双口径：Qoder 池终局行才带值（上游 usage.credits / original_credits） */}
+              <th
+                className="w-[9%] px-2 py-2 text-right font-medium"
+                title="上游实扣积分，括号内为峰谷折扣前原价；仅 Qoder 池且上游下发 usage 时才有值"
+              >
+                积分
+              </th>
               <th className="w-[10%] px-2 py-2 font-medium">失败原因</th>
             </tr>
           </thead>
@@ -652,6 +659,25 @@ function ApiRecentRequests() {
                 <td className="px-2 py-1.5 text-right font-mono text-slate-400 dark:text-zinc-500">
                   {r.ttfbMs != null ? `${r.ttfbMs}ms` : '-'}
                 </td>
+                <td
+                  className="px-2 py-1.5 text-right font-mono text-amber-600 dark:text-amber-400"
+                  title={
+                    r.credits != null && r.originalCredits != null && r.originalCredits > r.credits
+                      ? `实扣 ${r.credits} · 折前 ${r.originalCredits} · 省 ${(r.originalCredits - r.credits).toFixed(4)}`
+                      : undefined
+                  }
+                >
+                  {r.credits != null ? (
+                    <>
+                      {r.credits}
+                      {r.originalCredits != null && r.originalCredits > r.credits && (
+                        <span className="text-slate-400 dark:text-zinc-500">（{r.originalCredits}）</span>
+                      )}
+                    </>
+                  ) : (
+                    '-'
+                  )}
+                </td>
                 <td className="truncate px-2 py-1.5 text-rose-600 dark:text-rose-300" title={r.error ?? undefined}>
                   {r.error ?? ''}
                 </td>
@@ -659,14 +685,14 @@ function ApiRecentRequests() {
             ))}
             {loading && (
               <tr>
-                <td colSpan={9} className="px-2 py-6 text-center text-slate-400">
+                <td colSpan={10} className="px-2 py-6 text-center text-slate-400">
                   加载中…
                 </td>
               </tr>
             )}
             {rows.length === 0 && !loading && (
               <tr>
-                <td colSpan={9} className="px-2 py-6 text-center text-slate-400">
+                <td colSpan={10} className="px-2 py-6 text-center text-slate-400">
                   {/* M-7：total 为筛选后计数，文案分场景——有筛选用筛选文案，无筛选才提天数 */}
                   {(pool !== 'all' || result !== 'all') ? '当前筛选无匹配请求' : `最近 ${days} 天无请求`}
                 </td>
