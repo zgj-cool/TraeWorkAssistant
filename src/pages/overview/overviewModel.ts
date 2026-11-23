@@ -351,6 +351,8 @@ export function summarizeQoder(
   snapshots: QoderCreditsSnapshot[],
   webUsage: QoderWebUsageToday | null,
   nowMs = Date.now(),
+  /** API 网关 Qoder 池当日用量（积分测量口径，消耗统计首选数据源） */
+  gatewayDay: UsageDayView | null = null,
 ): PlatformSummary {
   const nowSec = Math.floor(nowMs / 1000);
   const windowEnd = nowSec + EXPIRY_SEC;
@@ -368,10 +370,14 @@ export function summarizeQoder(
     }
   }
   for (const a of creditsAccounts) {
-    const active = (a.packages ?? []).filter((p) => p.amount == null || p.amount > 0);
+    const pkgs = a.packages ?? [];
+    // 明细已含 plan 订阅配额包（R-11 逐包口径）→ 不再按聚合口径补订阅额度，
+    // 判定与积分看板 KPI / 到期日历同款（some 不过滤 amount）
+    const hasPlanPkg = pkgs.some((p) => p.source === 'plan');
+    const active = pkgs.filter((p) => p.amount == null || p.amount > 0);
     const soon = active.filter((p) => {
       const end = dateStrToEndTs(p.expire_at);
-      return end != null && end <= windowEnd;
+      return end != null && end > nowSec && end <= windowEnd;
     });
     if (soon.length) {
       const amount = round(soon.reduce((s, p) => s + (p.amount ?? 0), 0));
@@ -384,29 +390,53 @@ export function summarizeQoder(
         credits: amount,
         view: 'qoder-credits',
       });
-    } else if (
-      active.length === 0 &&
+    }
+    // 订阅额度 7 天内重置：与积分看板同口径——明细未含 plan 包时按 plan_credits
+    // 全额计入合计（原先仅在「无任何包明细」时补条目且漏加 expiring，
+    // 有其它包在窗口内时订阅额度整体丢失，总览小于看板）
+    const planEnd = dateStrToEndTs(a.plan_expires_at);
+    if (
+      !hasPlanPkg &&
       (a.plan_credits ?? 0) > 0 &&
-      dateStrToEndTs(a.plan_expires_at) != null &&
-      (dateStrToEndTs(a.plan_expires_at) as number) <= windowEnd
+      planEnd != null &&
+      planEnd > nowSec &&
+      planEnd <= windowEnd
     ) {
+      const amount = round(a.plan_credits ?? 0);
+      expiring += amount;
       expiringDetails.push({
-        id: `qoder-exp-${a.user_id}`,
+        id: `qoder-exp-plan-${a.user_id}`,
         user_id: a.user_id,
         name: a.name,
         reason: '订阅积分 7 天内重置',
-        credits: round(a.plan_credits ?? 0),
+        credits: amount,
         view: 'qoder-credits',
       });
     }
   }
 
   const todaySnap = [...snapshots].reverse().find((s) => s.date.slice(0, 10) === today);
+  // 消耗统计口径：API 网关 Qoder 池积分测量值优先（唯一覆盖全部走网关流量、
+  // 且可逐账号/逐模型分账的权威源）；网关当日无条目时回退官网会话明细，
+  // 再回退本地积分快照差分。三者覆盖范围不同，notes 如实标注当前生效口径。
+  const gatewayUsed = gatewayDay ? round(gatewayDay.credits) : null;
   const officialUsed = webUsage?.ok ? webUsage.used_today : null;
-  const usedToday = officialUsed != null ? round(officialUsed) : todaySnap?.consumed != null ? round(todaySnap.consumed) : null;
-  const sourceNote = officialUsed != null
-    ? '今日已用：官网会话消耗明细（当前客户端登录账号）'
-    : webUsage?.error ? '今日已用：官网会话不可用，回退本地快照' : '今日已用：本地积分快照差分';
+  const usedToday =
+    gatewayUsed != null
+      ? gatewayUsed
+      : officialUsed != null
+        ? round(officialUsed)
+        : todaySnap?.consumed != null
+          ? round(todaySnap.consumed)
+          : null;
+  const sourceNote =
+    gatewayUsed != null
+      ? '今日已用：API 网关 Qoder 池实测积分'
+      : officialUsed != null
+        ? '今日已用：官网会话消耗明细（当前客户端登录账号）'
+        : webUsage?.error
+          ? '今日已用：官网会话不可用，回退本地快照'
+          : '今日已用：本地积分快照差分';
   return finish(
     'qoder',
     accounts.length,
@@ -562,7 +592,26 @@ export function summarizeCreditUsage(data: OverviewData, nowMs = Date.now()): Cr
       : (r.reward ?? 0);
     if (reward > 0) earnedByUid.set(r.user_id, (earnedByUid.get(r.user_id) ?? 0) + reward);
   }
+  // Qoder 逐账号消耗：API 网关 Qoder 池当日积分测量值优先（accounts[].credits，
+  // uid 即账号 id 口径）；网关当日无该账号记录时回退本地快照差分
+  // （消耗 = 前日余额 + 当日签到 − 当日余额，负值记 0）。
+  const gwCreditsByUid = new Map<string, number>();
+  for (const c of data.gwUsage?.qoder ? (todayUsage(data.gwUsage.qoder, today)?.accounts ?? []) : []) {
+    if (c.credits > 0) gwCreditsByUid.set(c.name, c.credits);
+  }
   for (const a of data.qoderAccounts) {
+    const gwUsed = gwCreditsByUid.get(a.id);
+    if (gwUsed != null) {
+      rows.push({
+        id: `qoder-${a.id}`,
+        platform: 'qoder',
+        uid: a.id,
+        name: a.nickname,
+        credits: round(gwUsed),
+        source: 'API 网关实测积分',
+      });
+      continue;
+    }
     const cur = todaySnap?.accounts?.find((x) => x.user_id === a.id)?.total ?? null;
     const prev = prevSnap?.accounts?.find((x) => x.user_id === a.id)?.total ?? null;
     const earned = earnedByUid.get(a.id) ?? 0;
@@ -623,6 +672,7 @@ export function buildOverview(data: OverviewData): {
       data.qoderSnapshots,
       data.qoderWebUsage,
       now,
+      todayUsage(data.gwUsage?.qoder, localDate(now)),
     ),
   ];
   return {

@@ -38,6 +38,8 @@ import { buildModelTrend } from './modelTrend';
  * issue #169：Trae 上游 2026-10-28 起 token_usage 事件显式下发 cached_tokens=0（账单侧
  * cache_read 正常计费），网关转发口径单请求无法恢复真实缓存值（不伪造，出站保持 0）。
  * Trae 平台网关源并列展示官网账单口径 cache_read 作对账参照（数据独立不混合）。
+ * 缓存命中率：三源同口径（缓存读取 / 输入总量）。网关源不再一律置空——WB/Qoder 池
+ * 有真实 cached_tokens 入账即出比率，仅「确实无下发」时显示「—」，避免把可用数据一并隐藏。
  */
 
 const SEG_LABELS: Record<string, string> = {
@@ -208,8 +210,15 @@ export default function TokensTab({
   // 统一口径：总 Token = input + output + cache_write（官网/网关 cache_write 恒 0）；
   // 官网 input 假设已含缓存读取（与本地源供应商语义一致），不重复计。
   const totalTokens = agg.input + agg.output + agg.cache_write;
+  // 缓存命中率三源同口径（缓存读取 / 输入总量；input 按供应商语义已含缓存读取）。
+  // 网关源此前恒为 null（issue #169 只针对 Trae 池上游显式下发 0 的场景），连带把
+  // WB/Qoder 池已真实入账的 cached_tokens 一并吞掉，出现「都没有缓存命中率」。
+  // 现改为数据驱动：网关源有缓存测量即出比率，确实无下发时如实显示「—」（不伪造
+  // 0%）；本地/官网源维持原语义（input>0 即成比率，无缓存读取如实为 0.0%）。
   const hitRate =
-    source !== 'gateway' && agg.input > 0 ? agg.cache_read / agg.input : null;
+    agg.input > 0 && (source !== 'gateway' || agg.cache_read > 0)
+      ? agg.cache_read / agg.input
+      : null;
   // Trae 网关源账单口径缓存命中率（issue #169 对账）：官方账单 cache_read / 官网 input
   // （官网 input 按供应商语义已含缓存读取，与官网源 hitRate 同分母口径）。转发口径恒 0
   // 时用户在此直接看到真实命中率
@@ -217,12 +226,12 @@ export default function TokensTab({
     traeActive && agg.billingCacheRead.total > 0 && agg.billingCacheRead.input > 0
       ? agg.billingCacheRead.total / agg.billingCacheRead.input
       : null;
+  // 网关源同样按「缓存读取 + 新增输入 + 输出」堆叠：WB/Qoder 池有真实缓存入账时
+  // 才出现缓存段（Trae 池上游恒 0 时该段自然为空，柱形与旧「输入/输出」一致）
   const segments =
     source === 'local'
       ? (['cache_read', 'new_input', 'output', 'cache_write'] as const)
-      : source === 'gateway'
-        ? (['input', 'output'] as const)
-        : (['cache_read', 'new_input', 'output'] as const);
+      : (['cache_read', 'new_input', 'output'] as const);
 
   // ---- 趋势数据（堆叠柱 + 调用虚线）----
   const trend = useMemo(
@@ -236,16 +245,12 @@ export default function TokensTab({
               : `${+date.slice(5, 7)}/${+date.slice(8, 10)}`,
           calls: a.calls,
         };
-        // local/official：input 均按供应商语义含缓存读取，拆分为 缓存读取 + 新增输入（柱总高 = input + output，与总卡一致）
-        if (source === 'local' || source === 'official') {
-          row.cache_read = a.cache_read;
-          row.new_input = Math.max(0, a.input - a.cache_read);
-          row.output = a.output;
-          if (source === 'local') row.cache_write = a.cache_write;
-        } else {
-          row.input = a.input;
-          row.output = a.output;
-        }
+        // 三源统一：input 均按供应商语义含缓存读取，拆分为 缓存读取 + 新增输入
+        //（柱总高 = input + output，与总卡一致；网关源缓存恒 0 时新增输入 = 输入）
+        row.cache_read = a.cache_read;
+        row.new_input = Math.max(0, a.input - a.cache_read);
+        row.output = a.output;
+        if (source === 'local') row.cache_write = a.cache_write;
         return row;
       }),
     [dateList, range, agg, source],
@@ -383,7 +388,13 @@ export default function TokensTab({
             <StatCard
               label="输入 Token"
               value={fmtTokens(agg.input)}
-              hint={source !== 'gateway' ? `其中缓存读取 ${fmtTokens(agg.cache_read)}` : undefined}
+              hint={
+                source !== 'gateway'
+                  ? `其中缓存读取 ${fmtTokens(agg.cache_read)}`
+                  : agg.cache_read > 0
+                    ? `其中缓存读取 ${fmtTokens(agg.cache_read)}`
+                    : undefined
+              }
               tone="violet"
             />
             <StatCard
@@ -397,10 +408,10 @@ export default function TokensTab({
               value={hitRate != null ? `${(hitRate * 100).toFixed(1)}%` : '—'}
               hint={
                 source === 'gateway'
-                  ? // 审查修复：缓存提示数据驱动——WB/Qoder 池 cached_tokens 有真实入账，
-                    // 不得在值 > 0 时仍断言「上游未下发为 0」（Qoder 页默认网关源）
-                    `转发口径缓存 ${fmtTokens(agg.cache_read)}` +
-                    (agg.cache_read > 0 ? '' : '（上游未下发，如实保持 0）') +
+                  ? // 数据驱动：有缓存测量即出命中率；确实无下发时如实提示（不伪造 0%）
+                    (hitRate != null
+                      ? `转发口径 · 缓存读取 / 输入总量`
+                      : '转发口径无缓存测量（上游未下发缓存字段）') +
                     (agg.billingCacheRead.total > 0
                       ? ` · 账单口径 ${fmtTokens(agg.billingCacheRead.total)}`
                       : '')

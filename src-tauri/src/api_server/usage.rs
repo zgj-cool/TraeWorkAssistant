@@ -160,6 +160,10 @@ pub struct DayStats {
     /// 供模型排行展示「实扣 / 折前」双口径，差额即该模型的折扣额
     #[serde(default)]
     pub model_original_credits: HashMap<String, f64>,
+    /// 按上游账号的积分测量（仅 Qoder 桶非零）：总览「各账号积分消耗明细」
+    /// 与 Qoder 消耗口径统一取网关源的数据基础（同名旧文件无此键 → 空表）
+    #[serde(default)]
+    pub account_credits: HashMap<String, f64>,
 }
 
 impl DayStats {
@@ -219,15 +223,20 @@ impl DayStats {
 
     /// 记录一次积分测量（issue #82 T2：仅 Qoder 网关路径使用）。
     /// 任一值缺失（上游未下发 usage）则不入账——与「上游未下发 usage 不得伪造」口径一致；
-    /// 负值防御性截断为 0；有值时按模型累加（T2.4 模型粒度排行数据源）。
-    /// 截断后为 0 的值不入模型榜（负值防御 + 上游真实 0 消耗都不产生 0 值假条目）。
-    pub fn record_credits(&mut self, model: &str, credits: Option<f64>, original: Option<f64>) {
+    /// 负值防御性截断为 0；有值时按模型/账号累加（T2.4 模型粒度排行 + 总览逐账号明细数据源）。
+    /// 截断后为 0 的值不入模型/账号榜（负值防御 + 上游真实 0 消耗都不产生 0 值假条目）。
+    pub fn record_credits(&mut self, uid: &str, model: &str, credits: Option<f64>, original: Option<f64>) {
         let model_key = bucket_key(model);
         if let Some(c) = credits {
             let c = c.max(0.0);
             self.credits += c;
             if c > 0.0 {
                 *self.model_credits.entry(model_key.clone()).or_default() += c;
+                // "none" = 未取到号（轮换耗尽/断连）的失败行，虽不计积分（credits 为
+                // None），防御性排除，避免账号榜出现假账号
+                if uid != "none" {
+                    *self.account_credits.entry(uid.to_string()).or_default() += c;
+                }
             }
         }
         if let Some(o) = original {
@@ -408,10 +417,19 @@ impl UsageFile {
     }
 
     /// 记录一次积分测量到 Qoder 桶当日 entry（issue #82 T2；
-    /// `day` 由调用方在持有 usage 锁期间取定，保证与请求统计落同一 entry）
-    pub fn record_credits_qoder(&mut self, model: &str, day: &str, credits: Option<f64>, original: Option<f64>) {
+    /// `day` 由调用方在持有 usage 锁期间取定，保证与请求统计落同一 entry）。
+    /// `uid` 落账号维度积分（总览逐账号消耗明细），"none"（未取到号）照常入账
+    /// 到总计/模型桶，但不进账号榜
+    pub fn record_credits_qoder(
+        &mut self,
+        uid: &str,
+        model: &str,
+        day: &str,
+        credits: Option<f64>,
+        original: Option<f64>,
+    ) {
         let d = self.qoder_days.entry(day.to_string()).or_default();
-        d.record_credits(model, credits, original);
+        d.record_credits(uid, model, credits, original);
     }
 
     /// 按桶记录一次缓存读 tokens 测量到指定日期 entry（M4 审查修复：
@@ -666,7 +684,17 @@ impl UsageDayView {
         }
         models.sort_by(|a, b| b.requests.cmp(&a.requests).then(a.name.cmp(&b.name)));
         let mut accounts: Vec<CounterView> =
-            d.accounts.iter().map(|(k, c)| view(k, c, 0.0, 0.0)).collect();
+            d.accounts
+                .iter()
+                .map(|(k, c)| {
+                    view(
+                        k,
+                        c,
+                        d.account_credits.get(k).copied().unwrap_or(0.0),
+                        0.0,
+                    )
+                })
+                .collect();
         accounts.sort_by(|a, b| b.requests.cmp(&a.requests).then(a.name.cmp(&b.name)));
         let mut keys: Vec<CounterView> =
             d.keys.iter().map(|(k, c)| view(k, c, 0.0, 0.0)).collect();
@@ -822,16 +850,22 @@ mod tests {
         let mut f = UsageFile::default();
         let day = today_key();
         // 同模型累加 + 不同模型分账；None（上游未下发 usage）不入账；负值截断
-        f.record_credits_qoder("m1", &day, Some(2.5), Some(3.0));
-        f.record_credits_qoder("m1", &day, Some(1.5), None);
-        f.record_credits_qoder("m2", &day, Some(4.0), Some(5.0));
-        f.record_credits_qoder("m2", &day, None, None);
-        f.record_credits_qoder("m2", &day, Some(-1.0), Some(-2.0));
+        f.record_credits_qoder("u1", "m1", &day, Some(2.5), Some(3.0));
+        f.record_credits_qoder("u1", "m1", &day, Some(1.5), None);
+        f.record_credits_qoder("u2", "m2", &day, Some(4.0), Some(5.0));
+        f.record_credits_qoder("u2", "m2", &day, None, None);
+        f.record_credits_qoder("u2", "m2", &day, Some(-1.0), Some(-2.0));
+        // 未取到号的失败行（"none"）即使有测量值也不进账号榜
+        f.record_credits_qoder("none", "m2", &day, Some(7.0), None);
         let d = f.qoder_days.get(&day).expect("当日统计应存在");
-        assert!((d.credits - 8.0).abs() < 1e-9, "credits 日合计 = 2.5+1.5+4.0");
+        assert!((d.credits - 15.0).abs() < 1e-9, "credits 日合计 = 2.5+1.5+4.0+7.0");
         assert!((d.original_credits - 8.0).abs() < 1e-9, "original_credits = 3.0+5.0（None/负值不入账）");
         assert!((d.model_credits.get("m1").copied().unwrap_or(0.0) - 4.0).abs() < 1e-9);
-        assert!((d.model_credits.get("m2").copied().unwrap_or(0.0) - 4.0).abs() < 1e-9);
+        assert!((d.model_credits.get("m2").copied().unwrap_or(0.0) - 11.0).abs() < 1e-9);
+        // 逐账号积分：u1=4.0、u2=4.0（负值截断后 0 不入榜）、"none" 被排除
+        assert!((d.account_credits.get("u1").copied().unwrap_or(0.0) - 4.0).abs() < 1e-9);
+        assert!((d.account_credits.get("u2").copied().unwrap_or(0.0) - 4.0).abs() < 1e-9);
+        assert!(d.account_credits.get("none").is_none());
         // 折前原价按同一模型键落桶：m1 只有一次带原价（3.0），m2 = 5.0（负值截断不入账）
         assert!((d.model_original_credits.get("m1").copied().unwrap_or(0.0) - 3.0).abs() < 1e-9);
         assert!((d.model_original_credits.get("m2").copied().unwrap_or(0.0) - 5.0).abs() < 1e-9);
@@ -841,7 +875,8 @@ mod tests {
         assert!((m1.credits - 4.0).abs() < 1e-9);
         assert!((m1.original_credits - 3.0).abs() < 1e-9, "折前原价同模型透出");
         let m2 = v.models.iter().find(|m| m.name == "m2").expect("m2 应在视图");
-        assert!((m2.credits - 4.0).abs() < 1e-9);
+        // 4.0（u2）+ 7.0（"none" 行的测量值仍计入模型/总计，仅不进账号榜）
+        assert!((m2.credits - 11.0).abs() < 1e-9);
         assert!((m2.original_credits - 5.0).abs() < 1e-9);
     }
 
@@ -851,7 +886,7 @@ mod tests {
     fn record_credits_original_only_model_still_in_view() {
         let mut f = UsageFile::default();
         let day = today_key();
-        f.record_credits_qoder("only_orig", &day, None, Some(6.0));
+        f.record_credits_qoder("u1", "only_orig", &day, None, Some(6.0));
         let d = f.qoder_days.get(&day).expect("当日统计应存在");
         assert!((d.credits - 0.0).abs() < 1e-9, "无实扣不产生实扣值");
         let v = UsageDayView::from_day(&day, d);

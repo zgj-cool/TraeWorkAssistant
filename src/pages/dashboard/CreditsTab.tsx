@@ -41,9 +41,10 @@ import { buildModelTrend } from './modelTrend';
  * ① 总积分统计卡（区间总获得/区间总消耗/净获得）② 积分趋势图 ③ 各模型消耗趋势（issue #160）④ 年度活动热力图。
  * 三源口径（§8 页面内诚实标注，不做静默合并）：
  * 官网 = Trae usage_history（365 天，日×模型）+ Buddy usage_official（31 天，日合计；无按日模型明细，各模型趋势走空态）；
- * 本地 = WB 快照差分（365 天，日合计）+ Qoder 快照差分（365 天，日合计；官网无按日明细）；
+ * 本地 = WB 快照差分（365 天，日合计）+ Qoder 快照差分（365 天，日合计；官网无按日明细，作为网关源的降级回退）；
  * API 网关 = Trae/Buddy 池 usage_stats（90 天，请求数口径——api_usage 仅记 tokens 不记积分扣减，§3.1 决策）+
  * Qoder 池（90 天，积分测量口径——网关从上游 usage.credits 提取实测值，issue #82 T2，仅覆盖走网关流量）。
+ * Qoder 的消耗统计权威源为 API 网关（唯一可逐账号/逐模型分账的实测口径），页面默认选中网关源。
  */
 
 export default function CreditsTab({

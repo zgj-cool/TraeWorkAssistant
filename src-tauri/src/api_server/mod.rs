@@ -514,7 +514,7 @@ impl ApiSharedState {
             .usage
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        guard.record_credits_qoder(model, &day, credits, original_credits);
+        guard.record_credits_qoder(uid, model, &day, credits, original_credits);
         // G3：ttfb 统计用入口取定的 day（与积分/流水同行），不自取 today 分裂日期行
         guard.record_in_ttfb_on(
             usage::UsageBucket::Qoder,

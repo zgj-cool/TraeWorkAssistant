@@ -200,6 +200,62 @@ describe('summarizeQoder 与汇总', () => {
     expect(s.notes[0]).toContain('本地');
   });
 
+  it('Qoder 到期 = 窗口内积分包 + 明细未含 plan 包时的订阅额度（口径与积分看板一致）', () => {
+    const base = {
+      user_id: 'q1',
+      name: 'Qoder甲',
+      ok: true,
+      total: 1440,
+      plan_used: 0,
+      plan_expires_at: '2026-11-23',
+      source: 'pat',
+    };
+    // 明细只有资源包（无 plan 源）→ 订阅额度按 plan_credits 全额补入
+    const withBonus = summarizeQoder(
+      [],
+      {
+        ok: true,
+        accounts: [
+          {
+            ...base,
+            plan_credits: 440,
+            packages: [{ amount: 1000, expire_at: '2026-11-21', source: 'bonus' }],
+          },
+        ],
+      } as QoderCreditsResult,
+      [],
+      [],
+      null,
+      NOW,
+    );
+    expect(withBonus.expiringIn7d).toBe(1440);
+    expect(withBonus.expiringDetails.map((d) => d.credits)).toEqual([1000, 440]);
+
+    // 明细已含 plan 包 → 不重复补订阅额度（避免翻倍）
+    const withPlanPkg = summarizeQoder(
+      [],
+      {
+        ok: true,
+        accounts: [
+          {
+            ...base,
+            plan_credits: 440,
+            packages: [
+              { amount: 1000, expire_at: '2026-11-21', source: 'bonus' },
+              { amount: 440, expire_at: '2026-11-23', source: 'plan' },
+            ],
+          },
+        ],
+      } as QoderCreditsResult,
+      [],
+      [],
+      null,
+      NOW,
+    );
+    expect(withPlanPkg.expiringIn7d).toBe(1440);
+    expect(withPlanPkg.expiringDetails).toHaveLength(1);
+  });
+
   it('Qoder 官网会话可用时今日已用优先官方明细，失败回退快照', () => {
     const official = summarizeQoder(
       [],
@@ -222,6 +278,81 @@ describe('summarizeQoder 与汇总', () => {
     );
     expect(failed.usedToday).toBe(3);
     expect(failed.notes[0]).toContain('回退');
+  });
+
+  it('Qoder 消耗取 API 网关源：今日已用优先网关实测值，逐账号明细同源', () => {
+    const accounts = [
+      { id: 'q1', nickname: 'Qoder甲' },
+      { id: 'q2', nickname: 'Qoder乙' },
+    ] as QoderAccountView[];
+    // 网关当日：q1 实测 12、q2 实测 6；快照差分与官网会话都有更低的值（应被忽略）
+    const summary = summarizeQoder(
+      accounts,
+      null,
+      [],
+      [
+        { date: '2026-11-18', consumed: 1, total_balance: 100, ts: 0, accounts: [] },
+        { date: '2026-11-19', consumed: 99, total_balance: 80, ts: 0, accounts: [] },
+      ],
+      { ok: true, used_today: 77, source: 'official_web_cookie' },
+      NOW,
+      {
+        date: '2026-11-19',
+        total_requests: 3,
+        ok: 3,
+        errors: 0,
+        stream_requests: 0,
+        prompt_tokens: 0,
+        completion_tokens: 0,
+        cached_tokens: 0,
+        credits: 18,
+        original_credits: 20,
+        avg_duration_ms: 0,
+        models: [],
+        accounts: [
+          { name: 'q1', requests: 2, ok: 2, errors: 0, credits: 12 },
+          { name: 'q2', requests: 1, ok: 1, errors: 0, credits: 6 },
+        ],
+        keys: [],
+        key_tokens: [],
+        account_tokens: [],
+      } as UsageDayView,
+    );
+    expect(summary.usedToday).toBe(18);
+    expect(summary.notes[0]).toContain('网关');
+
+    const usage = summarizeCreditUsage({ ...emptyData(), qoderAccounts: accounts, gwUsage: {
+      qoder: [
+        {
+          date: '2026-11-19',
+          total_requests: 3,
+          ok: 3,
+          errors: 0,
+          stream_requests: 0,
+          prompt_tokens: 0,
+          completion_tokens: 0,
+          cached_tokens: 0,
+          credits: 18,
+          original_credits: 20,
+          avg_duration_ms: 0,
+          models: [],
+          accounts: [
+            { name: 'q1', requests: 2, ok: 2, errors: 0, credits: 12 },
+            { name: 'q2', requests: 1, ok: 1, errors: 0, credits: 6 },
+          ],
+          keys: [],
+          key_tokens: [],
+          account_tokens: [],
+        } as UsageDayView,
+      ],
+    } }, NOW);
+    const qoderRows = usage.rows.filter((r) => r.platform === 'qoder');
+    expect(qoderRows.map((r) => [r.name, r.credits])).toEqual([
+      ['Qoder甲', 12],
+      ['Qoder乙', 6],
+    ]);
+    expect(qoderRows.every((r) => r.source === 'API 网关实测积分')).toBe(true);
+    expect(usage.total).toBe(18);
   });
 
   it('总览只输出三平台，汇总按三平台求和且缺失不臆造为 0', () => {

@@ -596,12 +596,22 @@ export default function BuddyAiCredits() {
   );
   const sumRequests = useMemo(() => usageInRange.reduce((s, u) => s + u.total_requests, 0), [usageInRange]);
   const sumErrors = useMemo(() => usageInRange.reduce((s, u) => s + u.errors, 0), [usageInRange]);
+  // 网关转发口径缓存读取（UsageDayView.cached_tokens；上游未下发则为 0）
+  const sumCached = useMemo(
+    () => usageInRange.reduce((s, u) => s + (u.cached_tokens ?? 0), 0),
+    [usageInRange],
+  );
+  // 缓存命中率 = 缓存读取 / 输入总量（prompt 按供应商语义已含缓存读取）。
+  // 无缓存测量时不出比率（如实显「—」，不伪造 0%）
+  const gwHitRate = sumCached > 0 && sumPrompt > 0 ? sumCached / sumPrompt : null;
   // 柱线组合趋势（输入/输出堆叠柱 + 调用次数虚线，对齐国内网关源口径）
   const tokenTrend = useMemo(
     () =>
       usageInRange.map((u) => ({
         date: u.date.slice(5),
-        输入: u.prompt_tokens,
+        // prompt 含缓存读取：拆为 缓存读取 + 新增输入（缓存未下发时新增输入 = 输入）
+        缓存读取: u.cached_tokens ?? 0,
+        新增输入: Math.max(0, u.prompt_tokens - (u.cached_tokens ?? 0)),
         输出: u.completion_tokens,
         调用: u.total_requests,
       })),
@@ -1039,7 +1049,7 @@ export default function BuddyAiCredits() {
             ))}
           </div>
         </div>
-        {/* 四统计卡（本地源：总/输入/输出/缓存命中率；网关源：总/输入/输出/请求数） */}
+        {/* 统计卡：本地源 = 总/输入/输出/缓存命中率；网关源 = 总/输入/输出/缓存命中率/请求数 */}
         {tokensSource === 'local' ? (
           <>
             <div className="mb-3 grid grid-cols-2 gap-3 md:grid-cols-4">
@@ -1114,7 +1124,7 @@ export default function BuddyAiCredits() {
           </>
         ) : (
           <>
-            <div className="mb-3 grid grid-cols-2 gap-3 md:grid-cols-4">
+            <div className="mb-3 grid grid-cols-2 gap-3 md:grid-cols-5">
               <div className="rounded-lg border-t-2 border-violet-500 bg-slate-50/60 p-3 dark:bg-zinc-900/60">
                 <div className="text-xs text-slate-500">总 Tokens</div>
                 <div className="text-xl font-bold tabular-nums text-violet-500">{sumTokens.toLocaleString()}</div>
@@ -1129,6 +1139,18 @@ export default function BuddyAiCredits() {
                 <div className="text-xs text-slate-500">输出 Tokens</div>
                 <div className="text-xl font-bold tabular-nums text-emerald-500">{sumCompletion.toLocaleString()}</div>
                 <div className="text-[11px] text-slate-400">completion 合计</div>
+              </div>
+              {/* 缓存命中率（与国内看板网关源同口径）：上游未下发缓存字段时如实显「—」 */}
+              <div className="rounded-lg border-t-2 border-fuchsia-500 bg-slate-50/60 p-3 dark:bg-zinc-900/60">
+                <div className="text-xs text-slate-500">缓存命中率</div>
+                <div className="text-xl font-bold tabular-nums text-fuchsia-500">
+                  {gwHitRate != null ? `${(gwHitRate * 100).toFixed(1)}%` : '—'}
+                </div>
+                <div className="text-[11px] text-slate-400">
+                  {sumCached > 0
+                    ? `缓存读取 ${sumCached.toLocaleString()}`
+                    : '上游未下发缓存字段'}
+                </div>
               </div>
               <div className="rounded-lg border-t-2 border-amber-500 bg-slate-50/60 p-3 dark:bg-zinc-900/60">
                 <div className="text-xs text-slate-500">请求数</div>
@@ -1156,7 +1178,8 @@ export default function BuddyAiCredits() {
                     <YAxis yAxisId="calls" orientation="right" tick={{ fontSize: 10 }} tickLine={false} axisLine={false} />
                     <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }} />
                     <Legend wrapperStyle={{ fontSize: 12 }} />
-                    <Bar yAxisId="tokens" dataKey="输入" stackId="t" fill="#0ea5e9" />
+                    <Bar yAxisId="tokens" dataKey="缓存读取" stackId="t" fill="#6366f1" />
+                    <Bar yAxisId="tokens" dataKey="新增输入" stackId="t" fill="#0ea5e9" />
                     <Bar yAxisId="tokens" dataKey="输出" stackId="t" fill="#10b981" radius={[3, 3, 0, 0]} />
                     <Line
                       yAxisId="calls"

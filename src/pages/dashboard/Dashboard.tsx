@@ -94,9 +94,12 @@ export default function CreditsDashboard({ platform }: { platform: 'trae' | 'bud
   const [qoderCredits, setQoderCredits] = useState<QoderCreditsResult | null>(null);
   const [qoderSnapshots, setQoderSnapshots] = useState<QoderCreditsSnapshot[]>([]);
   const [qoderCheckin, setQoderCheckin] = useState<QoderCheckinRecord[]>([]);
-  // 各统计 Tab 独立数据源状态（§3.4）；默认源按平台选择（Trae/Buddy 官网优先；Qoder 官网无消耗明细 → 本地快照；
-  // Qoder Token 仅网关源有实测数据 → 默认网关）
-  const [creditsSource, setCreditsSource] = useState<BoardSource>(platform === 'qoder' ? 'local' : 'official');
+  // 各统计 Tab 独立数据源状态（§3.4）；默认源按平台选择（Trae/Buddy 官网优先；
+  // Qoder 官网无消耗明细 → API 网关积分测量为权威消耗口径，本地快照降为回退源；
+  // Qoder Token 同样仅网关源有实测数据 → 默认网关）
+  const [creditsSource, setCreditsSource] = useState<BoardSource>(
+    platform === 'qoder' ? 'gateway' : 'official',
+  );
   const [tokensSource, setTokensSource] = useState<BoardSource>(
     platform === 'trae' ? 'official' : platform === 'qoder' ? 'gateway' : 'local',
   );
@@ -653,16 +656,26 @@ export default function CreditsDashboard({ platform }: { platform: 'trae' | 'bud
             .reduce((s, r) => s + (r.reward ?? 0), 0);
           return todaySnap?.earned != null ? Math.max(0, todaySnap.earned) : checkinEarned;
         })();
+    // 今日消耗：API 网关 Qoder 池实测积分优先（逐账号可拆，支持账号筛选），
+    // 网关当日无条目时回退本地快照差分（原口径）
+    const gwDay = gateway?.qoder?.find((d) => d.date === today);
+    const gwConsumed = gwDay
+      ? visibleUids
+        ? gwDay.accounts
+            .filter((a) => visibleUids.has(a.name))
+            .reduce((s, a) => s + a.credits, 0)
+        : gwDay.credits
+      : null;
     return {
       accounts: accs.length,
       totalCredits,
       packages,
       todayEarned,
-      // null = 差分不可比（首日/账号数变动日）→ KPI 卡显示「—」，不与零消耗混淆
-      todayConsumed: todaySnap?.consumed ?? null,
+      // 网关无当日条目时回退快照差分；差分为 null（不可比日）→ KPI 显示「—」
+      todayConsumed: gwConsumed != null ? gwConsumed : (todaySnap?.consumed ?? null),
       expiring7d: expiring,
     };
-  }, [visibleQoderCredits, qoderSnapshots, qoderCheckin, visibleUids, today]);
+  }, [visibleQoderCredits, qoderSnapshots, qoderCheckin, visibleUids, today, gateway]);
 
   const kpi = isTrae ? traeKpi : isQoder ? qoderKpi : buddyKpi;
 
@@ -680,6 +693,8 @@ export default function CreditsDashboard({ platform }: { platform: 'trae' | 'bud
   // skippedDates>0 时调用方必须说明，不静默少计）
   const todaySnapEarned = wbSnapshots.find((s) => s.date === today)?.earned;
   const qoderTodaySnap = qoderSnapshots.find((s) => s.date === today);
+  // Qoder 网关当日条目（消耗统计权威口径；存在即优先于快照差分）
+  const qoderGatewayToday = gateway?.qoder?.find((d) => d.date === today) ?? null;
   const qoderLastSnapDate = qoderSnapshots.reduce<string | null>((acc, s) => (!acc || s.date > acc ? s.date : acc), null);
   const earnedHint = isTrae
     ? filtersActive && traeFilteredEarned && traeFilteredEarned.skippedDates > 0
@@ -700,13 +715,17 @@ export default function CreditsDashboard({ platform }: { platform: 'trae' | 'bud
   const consumedHint = isTrae
     ? undefined
     : isQoder
-      ? qoderTodaySnap?.consumed != null
-        ? undefined
-        : qoderTodaySnap
-          ? '账号数变动 · 当日差分不可比'
-          : qoderLastSnapDate
-            ? `快照差分推导（截至 ${qoderLastSnapDate}）`
-            : '暂无快照 · 待首次积分查询落库'
+      ? // Qoder 消耗统计口径：网关实测积分优先（仅覆盖走网关流量），
+        // 网关无当日条目时回退快照差分——两种口径分别标注
+        qoderGatewayToday
+        ? 'API 网关实测积分 · 仅覆盖走网关流量'
+        : qoderTodaySnap?.consumed != null
+          ? '快照差分推导 · 网关无当日记录'
+          : qoderTodaySnap
+            ? '账号数变动 · 当日差分不可比'
+            : qoderLastSnapDate
+              ? `快照差分推导（截至 ${qoderLastSnapDate}）`
+              : '暂无快照 · 待首次积分查询落库'
       : wbOfficial
         ? wbOfficial.stale
           ? '缓存回退 · 非当日数据'
@@ -716,9 +735,10 @@ export default function CreditsDashboard({ platform }: { platform: 'trae' | 'bud
           : undefined;
 
   // D3：consumed 为聚合口径（官方 summary / 快照差分）无法按账号拆分——有筛选时
-  // 诚实标注，避免与已按筛选取数的 earned 数值口径混淆（数值-徽标一致性）
+  // 诚实标注，避免与已按筛选取数的 earned 数值口径混淆（数值-徽标一致性）。
+  // 例外：Qoder 网关源已按 uid 拆分（accounts[]），筛选真实生效，无需该标注
   const consumedHintShown =
-    filtersActive && !isTrae
+    filtersActive && !isTrae && !(isQoder && qoderGatewayToday)
       ? consumedHint
         ? `${consumedHint} · 聚合口径，未按账号筛选`
         : '聚合口径，未按账号筛选'

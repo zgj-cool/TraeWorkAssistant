@@ -186,7 +186,7 @@ export default function Overview() {
       </div>
 
       <p className="mt-5 text-[12px] leading-relaxed text-slate-500 dark:text-zinc-400">
-        统计口径：Trae 今日已用取官网消耗明细（usage_history_fetch，缓存命中时标注）；Buddy 取官网用量聚合（workbuddy_usage_official_all），官网不可用时回退本地快照；Qoder 自动读取客户端登录会话后拉取官网消耗明细（按 begin_at 聚合名义消耗），会话不可用回退本地积分快照差分。Token 消耗取 API 网关按落日用量（Trae / Buddy / Qoder 三池，按账号归入对应平台卡片，与官网积分口径独立；BuddyAI / 自定义池见 API 管理页用量统计）。刷新仅重载缓存/本地数据，强制上游积分刷新请进入对应平台积分看板。
+        统计口径：Trae 今日已用取官网消耗明细（usage_history_fetch，缓存命中时标注）；Buddy 取官网用量聚合（workbuddy_usage_official_all），官网不可用时回退本地快照；Qoder 取 API 网关 Qoder 池实测积分（上游 usage.credits，逐账号可拆），网关当日无记录时依次回退官网会话消耗明细与本地积分快照差分。Token 消耗取 API 网关按落日用量（Trae / Buddy / Qoder 三池，按账号归入对应平台卡片；BuddyAI / 自定义池见 API 管理页用量统计）。刷新仅重载缓存/本地数据，强制上游积分刷新请进入对应平台积分看板。
       </p>
     </div>
   );
