@@ -267,7 +267,7 @@ export function PlatformCard({
           : `${summary.alerts.length} 项待处理账号`;
 
   return (
-    <section className="card flex flex-col overflow-hidden hover:-translate-y-0.5 hover:border-slate-300/80 hover:shadow-soft-lg dark:hover:border-zinc-700/80">
+    <section className="card flex flex-col overflow-hidden">
       <button
         onClick={() => onGo(meta.home)}
         className="group/head flex items-center justify-between gap-2 border-b border-slate-200/60 px-4 py-3.5 text-left dark:border-zinc-800/60"
