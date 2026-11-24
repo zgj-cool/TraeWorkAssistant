@@ -173,7 +173,7 @@ Store         store/（SQLite 存储层——全量状态库 aiwork.sqlite：kv 
 | `GET /v1/models` | 统一模型目录（Trae 官网同步 + WB 目录 + 自定义三源合并），官网同步后无需重启 |
 | `POST /v1/chat/completions` | OpenAI 协议（流式 + 非流式） |
 | `POST /v1/messages` | Anthropic Messages 协议（message_start → content_block_* → message_delta → message_stop） |
-| `POST /v1/responses` | Codex Responses API 投影（WB 上游模型） |
+| `POST /v1/responses` | Codex Responses API 投影（统一调度：Buddy / Trae / Qoder / Custom 全池） |
 | `POST /v1/images/generations` / `/v1/images/edits` | 生图双端点（WB 上游，模型需 `supports_image=true`） |
 | `POST /v1/completions` | legacy text completion（prompt 转 user message 复用链路） |
 | `/v1/embeddings` | 明确 501（上游无对应能力，不做假实现） |

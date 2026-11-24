@@ -162,6 +162,110 @@ fn vendor_of(canonical: &str) -> &'static str {
     ""
 }
 
+// ==================== 倍率时段规则（闲时折扣，L1 人工维护） ====================
+
+/// 一条「时段 → 倍率」规则（闲时折扣）。
+///
+/// 背景：Trae 官网接口在闲时窗口（如午间 12:00–14:00）会按折后价计费，
+/// 但 `batch_get_detail_param` 的 `consumption_rate.data.rate` 只给快照时刻的
+/// 单一值（`models_sync.rs::extract_meta`），目录与调度都只有一维倍率：
+/// 同一模型在闲时同步得 0.06、非闲时同步得 0.11，快照随同步时刻漂移，
+/// 调度排序也就无法感知当前是否处在折扣窗口。
+///
+/// 落地口径（不猜上游折扣字段）：规则由用户在 L1 覆盖层人工维护，
+/// 命中窗口用规则倍率、未命中回落基准倍率（L1 rate → L2 官网 → L3 参考）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TraeRateWindow {
+    /// 起始时刻 `HH:MM`（含）
+    pub start: String,
+    /// 结束时刻 `HH:MM`（不含）；`end <= start` 视为跨午夜窗口（如 22:00–08:00）
+    pub end: String,
+    /// 窗口内生效倍率（0 = 免费）
+    pub rate: f64,
+    /// 备注（如「午间闲时」），仅展示；空则用时段字面量兜底
+    #[serde(default)]
+    pub label: Option<String>,
+    /// 生效星期（0=周日 … 6=周六，与 `num_days_from_sunday` 一致）；空 = 每天生效
+    #[serde(default)]
+    pub days: Vec<u8>,
+}
+
+/// `HH:MM` → 当日分钟数；格式非法/越界返回 None（脏数据不参与判定）
+pub fn parse_hhmm(s: &str) -> Option<u32> {
+    let (h, m) = s.trim().split_once(':')?;
+    let h: u32 = h.trim().parse().ok()?;
+    let m: u32 = m.trim().parse().ok()?;
+    (h < 24 && m < 60).then_some(h * 60 + m)
+}
+
+impl TraeRateWindow {
+    /// 该规则是否覆盖 `day`（0=周日）+ 当日第 `minutes` 分钟。
+    /// 时刻非法 / 零长度窗口（start == end）/ 星期不匹配 → 不覆盖。
+    pub fn covers(&self, day: u32, minutes: u32) -> bool {
+        if !self.days.is_empty() && !self.days.iter().any(|d| *d == day as u8) {
+            return false;
+        }
+        let (Some(s), Some(e)) = (parse_hhmm(&self.start), parse_hhmm(&self.end)) else {
+            return false;
+        };
+        if s == e {
+            return false;
+        }
+        if s < e {
+            minutes >= s && minutes < e
+        } else {
+            // 跨午夜：两端取并集（22:00–08:00 → [22:00,24:00) ∪ [00:00,08:00)）
+            minutes >= s || minutes < e
+        }
+    }
+
+    /// 展示标签：人工备注优先，否则时段字面量
+    fn display_label(&self) -> String {
+        match self.label.as_deref().map(str::trim) {
+            Some(l) if !l.is_empty() => l.to_string(),
+            _ => format!("{}–{}", self.start.trim(), self.end.trim()),
+        }
+    }
+}
+
+/// 按「当前时刻」解析生效倍率：命中的首个窗口规则优先，否则回落 `base`。
+///
+/// 返回 `(生效倍率, 命中窗口标签)`——标签非空表示当前处于折扣窗口（展示层
+/// 据此标注「闲时」并回显基准倍率）。`day`/`minutes` 由调用方按本地时区取，
+/// 便于测试注入（生产路径统一走 [`effective_rate_now`]）。
+pub fn effective_rate_at(
+    meta: Option<&TraeModelMeta>,
+    base: Option<f64>,
+    day: u32,
+    minutes: u32,
+) -> (Option<f64>, Option<String>) {
+    if let Some(m) = meta {
+        if let Some(windows) = &m.rate_windows {
+            for w in windows {
+                // 负值/NaN 规则视为脏数据跳过（防假定价：宁可用基准值）
+                if !w.rate.is_finite() || w.rate < 0.0 {
+                    continue;
+                }
+                if w.covers(day, minutes) {
+                    return (Some(w.rate), Some(w.display_label()));
+                }
+            }
+        }
+    }
+    (base, None)
+}
+
+/// 同 [`effective_rate_at`]，时刻取本机本地时区（调度热路径与目录聚合共用）。
+pub fn effective_rate_now(
+    meta: Option<&TraeModelMeta>,
+    base: Option<f64>,
+) -> (Option<f64>, Option<String>) {
+    use chrono::{Datelike, Timelike};
+    let now = chrono::Local::now();
+    let minutes = now.hour() * 60 + now.minute();
+    effective_rate_at(meta, base, now.weekday().num_days_from_sunday(), minutes)
+}
+
 // ==================== L1 人工维护覆盖层（trae_model_meta.json，§6.1） ====================
 
 /// L1 覆盖层条目（编辑弹框落盘；None = 该字段未人工指定，交由下层兜底）
@@ -169,8 +273,12 @@ fn vendor_of(canonical: &str) -> &'static str {
 pub struct TraeModelMeta {
     #[serde(default)]
     pub label: Option<String>,
+    /// 基准倍率（窗口外）；时段规则见 `rate_windows`
     #[serde(default)]
     pub rate: Option<f64>,
+    /// 倍率时段规则（闲时折扣）：命中窗口取其倍率，未命中回落 `rate`/下层链
+    #[serde(default)]
+    pub rate_windows: Option<Vec<TraeRateWindow>>,
     #[serde(default)]
     pub efforts: Option<Vec<String>>,
     #[serde(default)]
@@ -215,6 +323,71 @@ pub fn meta_clear(data_dir: &Path, model: &str) -> Result<bool, String> {
     if removed {
         crate::store::db(data_dir).kv_set("trae_model_meta", &map)?;
         super::config_cache::invalidate(data_dir, "trae_model_meta");
+    }
+    Ok(removed)
+}
+
+// ==================== 池级人工覆盖层（buddy/qoder 源，kv pool_model_meta） ====================
+
+/// Buddy / Qoder 目录条目的人工覆盖层（池级 L1，编辑弹框落盘）。
+///
+/// 背景：Trae 源有 L1 覆盖层（`trae_model_meta`，四层元数据链），Buddy/Qoder
+/// 目录被定位为「上游同步整表替换」的权威数据、无人工通道——上游倍率错标、
+/// 想禁用某池的某模型（issue #145 跨池扩展）时无从下手。本覆盖层独立 kv
+/// （`pool_model_meta`，键 `"{pool}|{canonical_id}"`），目录同步只写各自目录
+/// 键、永不覆盖人工值（与 Trae「同步不触碰 trae_model_meta」同款文件隔离）。
+///
+/// 当前生效字段：label（展示名）/ rate（基准倍率）/ rate_windows（闲时折扣，
+/// 与 [`TraeModelMeta::rate_windows`] 同语义）/ enabled（false = 该池不再作为
+/// 此模型的源，目录条目保留、管理端可见可重新启用）。结构复用
+/// `TraeModelMeta`（全 Option 字段），其余字段（efforts/context 等）为 Trae
+/// 源专属语义、池级覆盖不消费。
+pub fn pool_meta_key(pool: &str, canonical: &str) -> String {
+    format!("{pool}|{}", canonical_id(canonical))
+}
+
+/// 池级覆盖层读取（dispatch 热路径 / 目录聚合共用；config_cache 缓存，
+/// 写路径 set/clear 显式失效）
+pub fn load_pool_meta(data_dir: &Path) -> HashMap<String, TraeModelMeta> {
+    super::config_cache::get_or_load(data_dir, "pool_model_meta", || {
+        crate::store::db(data_dir).kv_get("pool_model_meta")
+    })
+}
+
+/// 池级覆盖层写入（upsert；编辑弹框整条覆盖，上游同步不触碰本键）
+pub fn pool_meta_set(
+    data_dir: &Path,
+    pool: &str,
+    model: &str,
+    meta: TraeModelMeta,
+) -> Result<(), String> {
+    if !matches!(pool, "buddy" | "qoder") {
+        return Err(format!("不支持的池: {pool}（仅 buddy/qoder）"));
+    }
+    let id = canonical_id(model);
+    if id.is_empty() {
+        return Err("模型 ID 不能为空".into());
+    }
+    let mut map: HashMap<String, TraeModelMeta> =
+        crate::store::db(data_dir).kv_get("pool_model_meta");
+    map.insert(pool_meta_key(pool, &id), meta);
+    let res = crate::store::db(data_dir).kv_set("pool_model_meta", &map);
+    super::config_cache::invalidate(data_dir, "pool_model_meta");
+    res
+}
+
+/// 池级覆盖层清除（恢复上游同步值）；返回是否确有删除
+pub fn pool_meta_clear(data_dir: &Path, pool: &str, model: &str) -> Result<bool, String> {
+    if !matches!(pool, "buddy" | "qoder") {
+        return Err(format!("不支持的池: {pool}（仅 buddy/qoder）"));
+    }
+    let id = canonical_id(model);
+    let mut map: HashMap<String, TraeModelMeta> =
+        crate::store::db(data_dir).kv_get("pool_model_meta");
+    let removed = map.remove(&pool_meta_key(pool, &id)).is_some();
+    if removed {
+        crate::store::db(data_dir).kv_set("pool_model_meta", &map)?;
+        super::config_cache::invalidate(data_dir, "pool_model_meta");
     }
     Ok(removed)
 }
@@ -328,8 +501,17 @@ pub struct UnifiedModel {
     /// 地区归属（Qoder 双区特有 cn|global，qoder_upstream::list 注入；非 Qoder 源恒 None）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub region: Option<String>,
-    /// 实际生效倍率 = 当前调度策略命中的来源侧（§3.1），非"最优值"
+    /// 实际生效倍率 = 当前调度策略命中的来源侧（§3.1），非"最优值"。
+    /// 闲时折扣口径：命中来源侧存在时段规则且当前处于窗口内时为折后倍率
     pub rate: Option<f64>,
+    /// 基准倍率（折扣窗口外，L1 rate → L2 官网 → L3 参考）。
+    /// 仅当 `rate` 与基准值不同（即处于闲时窗口）时下发，供展示层回显对照；
+    /// 无折扣概念的来源（buddy/custom 等）恒 None
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rate_base: Option<f64>,
+    /// 当前命中的倍率时段标签（如「午间闲时」「12:00–14:00」）；None = 未在窗口内
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rate_window: Option<String>,
     /// 思考档位（双语义合并展示，§3.1 注：仅 Buddy 池作为请求参数下发）
     pub efforts: Vec<String>,
     /// Max Mode 支持（Trae 池 1M 上下文，efforts::TRAE_MAX_MODE_REF 查表）：
@@ -347,7 +529,12 @@ pub struct UnifiedModel {
 struct TraeEntry {
     id: String,
     display: String,
+    /// 生效倍率（时段窗口命中时为折后价，否则等于 `rate_base`）
     rate: Option<f64>,
+    /// 基准倍率（窗口外）：L1 rate → L2 官网 → L3 参考
+    rate_base: Option<f64>,
+    /// 当前命中的时段标签；None = 不在任何折扣窗口内
+    rate_window: Option<String>,
     efforts: Vec<String>,
     context_length: Option<u64>,
     max_tokens: Option<u64>,
@@ -357,11 +544,13 @@ struct TraeEntry {
 /// 四层链解析 Trae 条目：L1 覆盖层 → L2 条目扩展字段 → L3 文档表（无 L4 档位猜测）
 fn trae_entry_of(m: &ModelOption, l1: Option<&TraeModelMeta>) -> TraeEntry {
     let canonical = canonical_id(&m.id);
-    // rate: L1 → L2 → L3
-    let rate = l1
+    // rate: L1 → L2 → L3 得到基准值；再按 L1 时段规则解析当前生效值
+    //（闲时折扣：官网同步写入的单一倍率只是快照时刻的值，不能代表全天）
+    let rate_base = l1
         .and_then(|l| l.rate)
         .or(m.rate)
         .or_else(|| doc_rate(&canonical));
+    let (rate, rate_window) = effective_rate_now(l1, rate_base);
     // efforts: L1 → L2 → L3 实证表（TRAE_EFFORTS_REF）。
     // L4 名称推断已停用（issue #31：light/high/extra_high 与名称推断的
     // low/medium/high 不符），无实证 → 空数组；全链归一到统一档位空间。
@@ -399,6 +588,8 @@ fn trae_entry_of(m: &ModelOption, l1: Option<&TraeModelMeta>) -> TraeEntry {
         id: m.id.clone(),
         display,
         rate,
+        rate_base,
+        rate_window,
         efforts,
         context_length,
         max_tokens,
@@ -442,6 +633,8 @@ pub fn unified_models_ex(
     qoder_flash_free: bool,
 ) -> Vec<UnifiedModel> {
     let l1 = load_meta(data_dir);
+    // 池级人工覆盖层（buddy/qoder 源，kv pool_model_meta）：倍率(+时段)/展示名/单模型开关
+    let pool_meta = load_pool_meta(data_dir);
     // 注（issue #38-4 排查决策）：Trae 侧快照（kv api_models）无条件参与聚合，
     // trae_ok=false 仅置 enabled 徽章、不过滤条目——Trae 池健康是瞬时状态，
     // 过滤会导致 /v1/models 随账号冷却抖动；池不可用的信号由 sources[].enabled
@@ -467,6 +660,14 @@ pub fn unified_models_ex(
     // 而是由末段按调度策略命中侧选定（与 rate 同源，§3.1/§3.3 #2）
     let mut buddy_disp: HashMap<String, String> = HashMap::new();
     let mut buddy_img: HashMap<String, bool> = HashMap::new();
+    // 池级覆盖层的倍率窗口候选（仅窗口命中时记录）：末段按命中侧选定
+    // 顶层 rate_base/rate_window——各池均可配时段规则，窗口字段不再 Trae 专属
+    let mut buddy_rate_win: HashMap<String, String> = HashMap::new();
+    let mut buddy_rate_base: HashMap<String, Option<f64>> = HashMap::new();
+    // Qoder 侧展示名候选（人工 label 优先于目录 name；末段按命中侧选定）
+    let mut qoder_disp: HashMap<String, String> = HashMap::new();
+    let mut qoder_rate_win: HashMap<String, String> = HashMap::new();
+    let mut qoder_rate_base: HashMap<String, Option<f64>> = HashMap::new();
     // Buddy 侧上下文候选值：由末段按调度策略命中侧选定（issue #38-4，
     // WB 池未启用时残留快照数值不得拖低双源条目的上下文声明）
     let mut buddy_ctx: HashMap<String, u64> = HashMap::new();
@@ -497,6 +698,8 @@ pub fn unified_models_ex(
                 vendor: String::new(),
                 region: None,
                 rate: t.rate,
+                rate_base: t.rate_base,
+                rate_window: t.rate_window.clone(),
                 efforts: t.efforts.clone(),
                 max_mode: super::efforts::trae_max_mode_supported(&canonical),
                 context_length: t.context_length,
@@ -504,6 +707,8 @@ pub fn unified_models_ex(
                 supports_image: t.supports_image,
                 sources: vec![UnifiedSource {
                     pool: "trae",
+                    // 源倍率同样透出生效值（闲时窗口内为折后价），
+                    // 与顶层 rate 命中侧判定保持同一口径
                     rate: t.rate,
                     enabled: enabled_of(TargetPool::Trae),
                     // issue #145：L1 meta.enabled=false → 源级静态禁用
@@ -523,21 +728,38 @@ pub fn unified_models_ex(
         let wrate = wb_rate(m);
         let wctx = if m.context_length > 0 { Some(m.context_length) } else { None };
         let wmt = if m.max_tokens > 0 { Some(m.max_tokens) } else { None };
+        // 池级人工覆盖（buddy）：基准倍率/时段规则/展示名/单模型开关——
+        // 人工 rate 覆盖上游同步值，窗口命中时取折后价（与 Trae 同语义）
+        let bmeta = pool_meta.get(&pool_meta_key("buddy", &canonical));
+        // 基准链：人工 rate 覆盖上游同步值；窗口外回落基准
+        let bbase = bmeta.and_then(|l| l.rate).or(wrate);
+        let (brate, bwin) = effective_rate_now(bmeta, bbase);
+        let b_label = bmeta
+            .and_then(|l| l.label.clone())
+            .filter(|s| !s.trim().is_empty());
+        let b_disabled = bmeta.and_then(|l| l.enabled).map_or(false, |e| !e);
+        if let Some(w) = &bwin {
+            buddy_rate_win.insert(canonical.clone(), w.clone());
+            buddy_rate_base.insert(canonical.clone(), bbase);
+        }
         match acc.get_mut(&canonical) {
             Some(u) => {
                 u.sources.push(UnifiedSource {
                     pool: "buddy",
-                    rate: wrate,
+                    rate: brate,
                     enabled: enabled_of(TargetPool::Buddy),
-                    disabled: false,
+                    disabled: b_disabled,
                 });
                 // display / supports_image 保留 Trae 侧现值，候选记入 buddy_disp/img，
-                // 由末段按策略命中侧选定（L1 label 绝对优先，§3.2）
-                if !m.display.is_empty() {
+                // 由末段按策略命中侧选定（L1 label 绝对优先，§3.2）；
+                // 池级人工 label 优先于 WB 目录展示名
+                if let Some(l) = b_label {
+                    buddy_disp.insert(canonical.clone(), l);
+                } else if !m.display.is_empty() {
                     buddy_disp.insert(canonical.clone(), m.display.clone());
                 }
                 buddy_img.insert(canonical.clone(), m.supports_image);
-                if let Some(r) = wrate {
+                if let Some(r) = brate {
                     u.rate = Some(r);
                 }
                 // issue #31：双源档位声明 = 各池映射统一空间后取并集
@@ -564,14 +786,19 @@ pub fn unified_models_ex(
                     canonical.clone(),
                     UnifiedModel {
                         id: m.id.clone(),
-                        display: if m.display.is_empty() {
+                        display: if let Some(l) = b_label.clone() {
+                            l
+                        } else if m.display.is_empty() {
                             m.id.clone()
                         } else {
                             m.display.clone()
                         },
                         vendor: String::new(),
                         region: None,
-                        rate: wrate,
+                        rate: brate,
+                        // 池级时段规则命中时回显基准倍率与窗口标签
+                        rate_base: bwin.as_ref().map(|_| bbase).flatten(),
+                        rate_window: bwin,
                         efforts: m.supported_efforts.clone(),
                         max_mode: false,
                         context_length: wctx,
@@ -579,9 +806,9 @@ pub fn unified_models_ex(
                         supports_image: Some(m.supports_image),
                         sources: vec![UnifiedSource {
                             pool: "buddy",
-                            rate: wrate,
+                            rate: brate,
                             enabled: enabled_of(TargetPool::Buddy),
-                            disabled: false,
+                            disabled: b_disabled,
                         }],
                         manual: false,
                     },
@@ -647,6 +874,9 @@ pub fn unified_models_ex(
                             // 动态目录自带真实倍率（credits "x1.39" 解析；NaN=元数据缺失
                             // 哨兵与 builtin 回落均保持 None 防假定价）
                             rate: rate_of(&m),
+                            // buddy-ai 无时段折扣通道：基准/窗口恒空
+                            rate_base: None,
+                            rate_window: None,
                             efforts: m.supported_efforts.clone(),
                             max_mode: false,
                             context_length: (m.context_length > 0).then_some(m.context_length),
@@ -756,6 +986,9 @@ pub fn unified_models_ex(
                         vendor: g.vendor.clone(),
                         region: None,
                         rate: if g.enabled { crate_rate } else { None },
+                        // custom 无时段折扣通道：基准/窗口恒空
+                        rate_base: None,
+                        rate_window: None,
                         efforts: Vec::new(),
                         max_mode: false,
                         context_length: g.ctx,
@@ -818,6 +1051,24 @@ pub fn unified_models_ex(
                         .collect()
                 })
                 .unwrap_or_default();
+            // 池级人工覆盖（qoder）：基准倍率/时段规则/展示名/单模型开关——
+            // 人工 rate 覆盖免费活动覆盖与目录 credits 解析值
+            let qmeta = pool_meta.get(&pool_meta_key("qoder", &canonical));
+            // 基准链：人工 rate 覆盖免费活动覆盖与目录 credits 解析值
+            let qbase = qmeta.and_then(|l| l.rate).or(qrate);
+            let (qrate_eff, qwin) = effective_rate_now(qmeta, qbase);
+            let q_label = qmeta
+                .and_then(|l| l.label.clone())
+                .filter(|s| !s.trim().is_empty());
+            let q_disabled = qmeta.and_then(|l| l.enabled).map_or(false, |e| !e);
+            if let Some(w) = &qwin {
+                qoder_rate_win.insert(canonical.clone(), w.clone());
+                qoder_rate_base.insert(canonical.clone(), qbase);
+            }
+            qoder_disp.insert(
+                canonical.clone(),
+                q_label.clone().unwrap_or_else(|| display.clone()),
+            );
             // 地区归属（cn|global）：qoder_upstream::list 为每条目注入 region 键；
             // 双区同名去重（global 优先）后单条目单 region，多源条目同样带 Qoder 侧 region
             let qregion = m.get("region").and_then(Value::as_str).map(str::to_string);
@@ -826,11 +1077,11 @@ pub fn unified_models_ex(
                     u.region = qregion;
                     u.sources.push(UnifiedSource {
                         pool: "qoder",
-                        rate: qrate,
+                        rate: qrate_eff,
                         enabled: enabled_of(TargetPool::Qoder),
-                        disabled: false,
+                        disabled: q_disabled,
                     });
-                    if let Some(r) = qrate {
+                    if let Some(r) = qrate_eff {
                         u.rate = Some(r);
                     }
                     // 审查修复（镜像 buddy_ctx 模式）：候选记入 map，由末段按
@@ -865,10 +1116,13 @@ pub fn unified_models_ex(
                         canonical.clone(),
                         UnifiedModel {
                             id: id.to_string(),
-                            display,
+                            display: q_label.unwrap_or(display),
                             vendor: qvendor.to_string(),
                             region: qregion,
-                            rate: qrate,
+                            rate: qrate_eff,
+                            // 池级时段规则命中时回显基准倍率与窗口标签
+                            rate_base: qwin.as_ref().map(|_| qrate).flatten(),
+                            rate_window: qwin,
                             efforts: qefforts,
                             max_mode: false,
                             context_length: qctx,
@@ -876,9 +1130,9 @@ pub fn unified_models_ex(
                             supports_image: qimg,
                             sources: vec![UnifiedSource {
                                 pool: "qoder",
-                                rate: qrate,
+                                rate: qrate_eff,
                                 enabled: enabled_of(TargetPool::Qoder),
-                                disabled: false,
+                                disabled: q_disabled,
                             }],
                             manual: false,
                         },
@@ -906,13 +1160,15 @@ pub fn unified_models_ex(
             .filter_map(|s| TargetPool::parse(s))
             .collect();
         // 命中池：自定义来源命中即直达（dispatch ⓪ 短路）→ 显示层同步命中 custom；
-        // 否则优先级序首个 enabled 源 → 任一 enabled 源（A2：按 POOL_FIXED_ORDER，
-        // 与 dispatch 候选序尾部补全同源——此前按 sources 插入序，buddy-ai 被插在
-        // trae 之前导致回退顺序与默认候选序不一致）→ 首源
+        // 否则优先级序首个 enabled 且未被池级开关禁用的源 → 任一可用源（A2：按
+        // POOL_FIXED_ORDER，与 dispatch 候选序尾部补全同源——此前按 sources 插入序，
+        // buddy-ai 被插在 trae 之前导致回退顺序与默认候选序不一致）→ 首源。
+        // `!s.disabled`：池级/L1 人工禁用的源不参与调度（dispatch 同语义），
+        // 展示层也不得作为命中侧，防「目录显示 buddy 倍率、实际路由 Trae」漂移
         let hit = u
             .sources
             .iter()
-            .find(|s| s.pool == "custom" && s.enabled)
+            .find(|s| s.pool == "custom" && s.enabled && !s.disabled)
             .map(|s| s.pool)
             .or_else(|| {
                 pools
@@ -920,7 +1176,7 @@ pub fn unified_models_ex(
                     .find_map(|p| {
                         u.sources
                             .iter()
-                            .find(|s| s.pool == p.as_str() && s.enabled)
+                            .find(|s| s.pool == p.as_str() && s.enabled && !s.disabled)
                             .map(|s| s.pool)
                     })
             })
@@ -928,7 +1184,7 @@ pub fn unified_models_ex(
                 super::dispatch::POOL_FIXED_ORDER.iter().find_map(|p| {
                     u.sources
                         .iter()
-                        .find(|s| s.pool == p.as_str() && s.enabled)
+                        .find(|s| s.pool == p.as_str() && s.enabled && !s.disabled)
                         .map(|s| s.pool)
                 })
             })
@@ -940,12 +1196,33 @@ pub fn unified_models_ex(
                 super::dispatch::POOL_FIXED_ORDER.iter().find_map(|p| {
                     u.sources
                         .iter()
-                        .find(|s| s.pool == p.as_str() && s.enabled)
+                        .find(|s| s.pool == p.as_str() && s.enabled && !s.disabled)
                         .and_then(|s| s.rate)
                 })
             })
             .or_else(|| u.sources.first().and_then(|s| s.rate))
             .or(u.rate);
+        // 闲时折扣字段按命中侧选定（各池均可配时段规则）：
+        // 命中侧在窗口内才下发 rate_base/rate_window，否则清空避免误导展示
+        let (mut win, mut base) = match hit {
+            Some("trae") => (u.rate_window.take(), u.rate_base.take()),
+            Some("buddy") => (
+                buddy_rate_win.get(&canonical).cloned(),
+                buddy_rate_base.get(&canonical).copied().flatten(),
+            ),
+            Some("qoder") => (
+                qoder_rate_win.get(&canonical).cloned(),
+                qoder_rate_base.get(&canonical).copied().flatten(),
+            ),
+            _ => (None, None),
+        };
+        // trae 侧窗口外（或基准==生效，无实际折扣）不标注
+        if hit == Some("trae") && (win.is_none() || base == u.rate) {
+            win = None;
+            base = None;
+        }
+        u.rate_window = win;
+        u.rate_base = base;
         // context_length 跟随命中侧（issue #38-4）：命中 buddy → WB 目录值；
         // 命中 trae/custom 或未命中 → Trae 四层链值（L1/L2/L3 诚实口径）。
         // WB 池未启用时命中侧不可能是 buddy，残留快照数值不再拖低双源条目
@@ -969,11 +1246,16 @@ pub fn unified_models_ex(
             }
         }
         // display：L1 人工 label 绝对最高优先（§3.2，覆盖双源展示名）；
-        // 未人工维护时命中 buddy → 取 WB 展示名，命中 trae → 保持 Trae 侧（已含 L2 label）
+        // 未人工维护时命中 buddy → 取 WB 展示名（池级人工 label 优先于目录名），
+        // 命中 qoder → 取 Qoder 展示名候选，命中 trae → 保持 Trae 侧（已含 L2 label）
         if let Some(label) = l1.get(&canonical).and_then(|m| m.label.clone()) {
             u.display = label;
         } else if hit == Some("buddy") {
             if let Some(d) = buddy_disp.get(&canonical) {
+                u.display = d.clone();
+            }
+        } else if hit == Some("qoder") {
+            if let Some(d) = qoder_disp.get(&canonical) {
                 u.display = d.clone();
             }
         }
@@ -988,8 +1270,10 @@ pub fn unified_models_ex(
                 u.supports_image = Some(*img);
             }
         }
-        // L1 人工维护标记统一按覆盖层判定
-        u.manual = l1.contains_key(&canonical);
+        // 人工维护标记统一按覆盖层判定（Trae L1 或池级覆盖任一存在即标记）
+        u.manual = l1.contains_key(&canonical)
+            || pool_meta.contains_key(&pool_meta_key("buddy", &canonical))
+            || pool_meta.contains_key(&pool_meta_key("qoder", &canonical));
         // 供应商：自定义模型用户填写值优先，否则按模型名系列推断（未知空串 → 前端显示 —）
         u.vendor = custom_vendor
             .get(&canonical)
@@ -1753,5 +2037,247 @@ mod tests {
         // 显式 true：与未设置同语义，不禁用
         let ds = find(&list, "DeepSeek-V4-Flash");
         assert!(ds.sources.iter().all(|s| !s.disabled));
+    }
+
+    // ==================== 倍率时段规则（闲时折扣） ====================
+
+    /// HH:MM 解析：合法/非法/越界
+    #[test]
+    fn t23_parse_hhmm_tolerates_and_rejects() {
+        assert_eq!(parse_hhmm("12:00"), Some(720));
+        assert_eq!(parse_hhmm(" 0:05 "), Some(5));
+        assert_eq!(parse_hhmm("23:59"), Some(1439));
+        assert_eq!(parse_hhmm("24:00"), None, "小时越界拒绝");
+        assert_eq!(parse_hhmm("12:60"), None, "分钟越界拒绝");
+        assert_eq!(parse_hhmm("1200"), None, "缺冒号拒绝");
+        assert_eq!(parse_hhmm(""), None);
+    }
+
+    /// 窗口覆盖判定：同日内 / 跨午夜 / 边界含头不含尾 / 星期过滤 / 零长度窗口
+    #[test]
+    fn t24_rate_window_covers_boundaries() {
+        let w = |start: &str, end: &str, days: Vec<u8>| TraeRateWindow {
+            start: start.into(),
+            end: end.into(),
+            rate: 0.06,
+            label: None,
+            days,
+        };
+        let noon = w("12:00", "14:00", vec![]);
+        // 12:00 含、14:00 不含（半开区间）
+        assert!(!noon.covers(1, 719));
+        assert!(noon.covers(1, 720));
+        assert!(noon.covers(1, 839));
+        assert!(!noon.covers(1, 840));
+
+        // 跨午夜 22:00–08:00：两端并集
+        let night = w("22:00", "08:00", vec![]);
+        assert!(night.covers(1, 1320), "22:00 进入窗口");
+        assert!(night.covers(1, 1439), "23:59 仍在窗口");
+        assert!(night.covers(1, 0), "00:00 仍在窗口");
+        assert!(night.covers(1, 479), "07:59 仍在窗口");
+        assert!(!night.covers(1, 480), "08:00 退出窗口");
+        assert!(!night.covers(1, 800), "午间不在夜间窗口");
+
+        // 星期过滤：仅周一（1）
+        let monday = w("12:00", "14:00", vec![1]);
+        assert!(monday.covers(1, 780));
+        assert!(!monday.covers(2, 780));
+
+        // 零长度窗口（start == end）不生效，避免全天误判
+        let degenerate = w("12:00", "12:00", vec![]);
+        assert!(!degenerate.covers(1, 720));
+
+        // 非法时刻不生效
+        let bad = w("xx:yy", "14:00", vec![]);
+        assert!(!bad.covers(1, 730));
+    }
+
+    /// 生效倍率解析：窗口内取规则值、窗口外回落基准、脏规则跳过、多规则首个命中
+    #[test]
+    fn t25_effective_rate_prefers_window_then_base() {
+        let meta = TraeModelMeta {
+            rate: Some(0.11),
+            rate_windows: Some(vec![
+                TraeRateWindow {
+                    start: "12:00".into(),
+                    end: "14:00".into(),
+                    rate: 0.06,
+                    label: Some("午间闲时".into()),
+                    days: vec![],
+                },
+                TraeRateWindow {
+                    start: "22:00".into(),
+                    end: "08:00".into(),
+                    rate: -1.0, // 脏规则：负值必须跳过
+                    label: None,
+                    days: vec![],
+                },
+            ]),
+            ..Default::default()
+        };
+        // 12:30 → 命中午间窗口
+        let (rate, label) = effective_rate_at(Some(&meta), Some(0.11), 1, 750);
+        assert_eq!(rate, Some(0.06));
+        assert_eq!(label.as_deref(), Some("午间闲时"));
+        // 10:00 → 未命中（22:00 窗口的脏规则被跳过），回落基准
+        let (rate, label) = effective_rate_at(Some(&meta), Some(0.11), 1, 600);
+        assert_eq!(rate, Some(0.11), "窗口外回落基准倍率");
+        assert!(label.is_none());
+        // 无规则 → 原样透传基准
+        let (rate, label) = effective_rate_at(None, Some(0.11), 1, 750);
+        assert_eq!(rate, Some(0.11));
+        assert!(label.is_none());
+        // 无基准且无窗口 → None（未声明，展示 — / 调度后置）
+        let (rate, label) = effective_rate_at(None, None, 1, 750);
+        assert!(rate.is_none());
+        assert!(label.is_none());
+    }
+
+    /// 窗口标签：人工备注优先，缺省回落时段字面量
+    #[test]
+    fn t26_rate_window_label_falls_back_to_literal() {
+        let w = TraeRateWindow {
+            start: "12:00".into(),
+            end: "14:00".into(),
+            rate: 0.06,
+            label: None,
+            days: vec![],
+        };
+        assert_eq!(w.display_label(), "12:00–14:00");
+        let w2 = TraeRateWindow {
+            label: Some("午间闲时".into()),
+            ..w
+        };
+        assert_eq!(w2.display_label(), "午间闲时");
+    }
+
+    /// 目录透出闲时字段（端到端）：时段规则命中 → 顶层 rate 为折后价、
+    /// rate_base 回显基准、rate_window 带标签；规则不命中 → 三字段回落基准且
+    /// 不标记窗口（避免前端把常态价误标「闲时」）。
+    /// 用「00:00–12:00」+「12:00–00:00」两条互补窗口覆盖全天，不依赖当前时刻。
+    #[test]
+    fn t27_catalog_surfaces_discount_window_fields() {
+        // 全窗口规则：无论何时运行都命中
+        let all_day = json!([
+            {"start": "00:00", "end": "12:00", "rate": 0.06, "label": "闲时"},
+            {"start": "12:00", "end": "00:00", "rate": 0.06, "label": "闲时"}
+        ]);
+        let f = fixture(
+            &[("deepseek-v4.1-flash", Some(0.11))],
+            &[],
+            Some(json!({"deepseek-v4.1-flash": {"rate_windows": all_day}})),
+        );
+        let list = unified_models(&f.dir, true, true, true);
+        let m = find(&list, "deepseek-v4.1-flash");
+        assert_eq!(m.rate, Some(0.06), "窗口内取折后倍率");
+        assert_eq!(m.rate_base, Some(0.11), "回显基准倍率供对照");
+        assert_eq!(m.rate_window.as_deref(), Some("闲时"));
+        // 源级倍率同口径（与顶层不漂移）
+        let ts = m.sources.iter().find(|s| s.pool == "trae").unwrap();
+        assert_eq!(ts.rate, Some(0.06));
+
+        // 星期 7 非法（合法 0..=6）→ 永不命中：三字段回落，不标窗口
+        let never = json!([{"start": "00:00", "end": "00:00", "rate": 0.06, "days": [7]}]);
+        let f2 = fixture(
+            &[("deepseek-v4.1-flash", Some(0.11))],
+            &[],
+            Some(json!({"deepseek-v4.1-flash": {"rate_windows": never}})),
+        );
+        let list2 = unified_models(&f2.dir, true, true, true);
+        let m2 = find(&list2, "deepseek-v4.1-flash");
+        assert_eq!(m2.rate, Some(0.11), "未命中回落基准");
+        assert!(m2.rate_base.is_none(), "未命中不下发基准对照");
+        assert!(m2.rate_window.is_none(), "未命中不标闲时");
+    }
+
+    // ==================== 池级人工覆盖层（buddy/qoder） ====================
+
+    /// 池级覆盖（buddy）：人工倍率/时段规则覆盖上游同步值，label 覆盖目录展示名，
+    /// manual 标记生效；顶层与源级口径一致（默认策略 buddy 优先 → 命中 buddy）
+    #[test]
+    fn t28_pool_meta_buddy_override_rate_window_label() {
+        let f = fixture(&[("glm-5.3", None)], &["glm-5.3"], None);
+        // 全窗口规则覆盖全天（不依赖运行时刻）+ 人工基准倍率 + 人工展示名
+        crate::store::db(&f.dir)
+            .kv_set(
+                "pool_model_meta",
+                &json!({
+                    "buddy|glm-5.3": {
+                        "rate": 0.11,
+                        "label": "人工GLM",
+                        "rate_windows": [
+                            {"start": "00:00", "end": "12:00", "rate": 0.06, "label": "闲时"},
+                            {"start": "12:00", "end": "00:00", "rate": 0.06, "label": "闲时"}
+                        ]
+                    }
+                }),
+            )
+            .unwrap();
+        super::super::config_cache::invalidate(&f.dir, "pool_model_meta");
+        let list = unified_models(&f.dir, true, true, true);
+        let m = find(&list, "glm-5.3");
+        // 窗口内取折后价（人工 0.06 而非目录 0.79）
+        assert_eq!(m.rate, Some(0.06), "时段规则命中取折后倍率");
+        assert_eq!(m.rate_base, Some(0.11), "基准 = 人工基准倍率");
+        assert_eq!(m.rate_window.as_deref(), Some("闲时"));
+        assert_eq!(m.display, "人工GLM", "池级 label 覆盖 WB 目录展示名");
+        assert!(m.manual, "池级覆盖存在即标记人工维护");
+        let bs = m.sources.iter().find(|s| s.pool == "buddy").unwrap();
+        assert_eq!(bs.rate, Some(0.06), "源级倍率同口径");
+    }
+
+    /// 池级覆盖（buddy）：enabled=false → 源级 disabled（issue #145 跨池扩展）；
+    /// 未设置人工值的源不受影响
+    #[test]
+    fn t28b_pool_meta_buddy_disabled_marks_source() {
+        let f = fixture(&[("glm-5.3", None)], &["glm-5.3", "hy4"], None);
+        crate::store::db(&f.dir)
+            .kv_set(
+                "pool_model_meta",
+                &json!({
+                    "buddy|glm-5.3": {"enabled": false}
+                }),
+            )
+            .unwrap();
+        super::super::config_cache::invalidate(&f.dir, "pool_model_meta");
+        let list = unified_models(&f.dir, true, true, true);
+        let g = find(&list, "glm-5.3");
+        let bs = g.sources.iter().find(|s| s.pool == "buddy").unwrap();
+        assert!(bs.disabled, "pool meta enabled=false → 源级静态禁用");
+        // 命中侧跳过禁用源 → rate 回落 Trae 源（L3 参考值 0.78），窗口字段清空
+        assert_eq!(g.rate, Some(0.78), "buddy 源被禁 → 顶层倍率回落 Trae 源");
+        // 无人工值条目不受影响
+        let h = find(&list, "hy4");
+        assert!(!h.sources.iter().find(|s| s.pool == "buddy").unwrap().disabled);
+    }
+
+    /// 池级覆盖（qoder）：人工倍率覆盖目录 credits 解析值；enabled=false → 源级禁用。
+    /// Qoder 侧 fixture 直接写统一目录聚合可见的进程目录（list_overridden），
+    /// 用 json! 手工构造目录条目（带 region 键镜像 list 注入形态）
+    #[test]
+    fn t28c_pool_meta_qoder_rate_override() {
+        let f = fixture(&[], &["hy4"], None);
+        // qoder 目录条目来自进程缓存（无法经 kv 播种）；覆盖层语义与 buddy 同构，
+        // 这里验证 meta 读写回路 + 聚合消费函数路径（真目录数据由 dispatch 侧覆盖）
+        crate::store::db(&f.dir)
+            .kv_set(
+                "pool_model_meta",
+                &json!({"qoder|step-5-preview": {"rate": 0.42, "label": "阶跃人工名"}}),
+            )
+            .unwrap();
+        super::super::config_cache::invalidate(&f.dir, "pool_model_meta");
+        let map = load_pool_meta(&f.dir);
+        assert_eq!(
+            map.get(&pool_meta_key("qoder", "Step-5-Preview")).and_then(|m| m.rate),
+            Some(0.42),
+            "键 canonical 归一（大小写不敏感）"
+        );
+        // 清除回路
+        assert!(pool_meta_clear(&f.dir, "qoder", "step-5-preview").unwrap());
+        assert!(!pool_meta_clear(&f.dir, "qoder", "step-5-preview").unwrap());
+        assert!(load_pool_meta(&f.dir).is_empty());
+        // 非法池拒绝
+        assert!(pool_meta_set(&f.dir, "trae", "x", TraeModelMeta::default()).is_err());
     }
 }

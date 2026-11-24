@@ -135,82 +135,12 @@ enum AggregateFail {
 
 // ==================== Handlers ====================
 
-/// WB 上游模型目录命中（T2.1 原始判定，保留供 /v1/models 与诊断复用）
-#[allow(dead_code)]
-fn wb_model_requested(state: &ApiSharedState, model: &str) -> bool {
-    wb_catalog::find(&wb_catalog::load(&state.data_dir), model).is_some()
-}
 
 fn internal_error_response() -> Response {
     Response::builder()
         .status(StatusCode::INTERNAL_SERVER_ERROR)
         .body(Body::from("{\"error\":{\"message\":\"internal error\"}}"))
         .unwrap()
-}
-
-/// T5.2/F-61 四段模型路由解析（别名→规则→系列通配→后缀）+ T5.6③ 后台任务降级。
-/// 返回 (最终模型, 路由级 effort 注入提示)；全未命中目录 → None（走 SOLO 上游）。
-fn resolve_wb_target(
-    state: &ApiSharedState,
-    model: &str,
-    body: &Value,
-) -> Option<(String, Option<String>)> {
-    let cfg = wb_model_route::load_config(&state.data_dir);
-    let catalog = wb_catalog::load(&state.data_dir);
-    let r = wb_model_route::resolve(&cfg, &catalog, model);
-    // Intl 目录动态化（2026-10-15）：动态抓取结果优先，缺失回落内置静态表
-    let intl_catalog = wb_catalog::buddy_ai_load(&state.data_dir);
-    // 审查修复：CN 目录未命中并查 Intl 目录（/v1/responses 同 dispatch 源判定，
-    // Intl 专属 id 如 deepseek-v4.1-flash 不得 404）；Intl 专属命中跳过 CN 目录降级
-    //（降级候选发往 buddy-ai 池上游不存在）
-    let intl_only = wb_catalog::find(&catalog, &r.model).is_none()
-        && (wb_catalog::find(&intl_catalog, &r.model).is_some()
-            || wb_catalog::find(&intl_catalog, model).is_some());
-    if wb_catalog::find(&catalog, &r.model).is_none()
-        && wb_catalog::find(&intl_catalog, &r.model).is_none()
-        && wb_catalog::find(&intl_catalog, model).is_none()
-    {
-        return None;
-    }
-    // T5.6③ 后台任务降级（显式开启才生效）：标题/摘要类短请求 → 目录最低倍率模型；
-    // F-76④ 长上下文降档：输入粗估超阈值 → flash 档模型。
-    // issue #26 白名单感知：降级候选 ∩ 白名单为空则跳过降级（原模型已过端点准入）
-    let whitelist = unified_catalog::load_whitelist(&state.data_dir);
-    let in_wl = |m: &str| unified_catalog::whitelist_allows(&whitelist, m);
-    let (downgrade_reason, final_model) = if !intl_only
-        && state.wb_bg_downgrade.load(std::sync::atomic::Ordering::Relaxed)
-        && wb_model_route::is_background_task(body)
-    {
-        (
-            "bg",
-            wb_model_route::cheapest_catalog_model_filtered(&catalog, &in_wl)
-                .unwrap_or(r.model.clone()),
-        )
-    } else if !intl_only
-        && state.wb_longctx_downgrade.load(std::sync::atomic::Ordering::Relaxed)
-        && wb_model_route::estimate_input_tokens(body)
-            >= wb_model_route::LONGCTX_TOKEN_THRESHOLD
-    {
-        (
-            "longctx",
-            wb_model_route::flash_catalog_model_filtered(&catalog, &in_wl)
-                .unwrap_or(r.model.clone()),
-        )
-    } else {
-        ("", r.model.clone())
-    };
-    // issue #184 修复（可观测性）：与 dispatch.rs 降级日志同口径——/v1/responses
-    // 路径降级改写同样落 app_log，此前仅 dispatch 路径有日志（审查补齐）
-    if !downgrade_reason.is_empty() && final_model != r.model {
-        crate::fs_utils::app_log(
-            &state.data_dir,
-            &format!(
-                "dispatch downgrade: requested={} routed={} -> downgraded={} reason={}",
-                model, r.model, final_model, downgrade_reason
-            ),
-        );
-    }
-    Some((final_model, r.effort_hint))
 }
 
 /// T5.3/F-62 默认深度思考：客户端未显式请求 effort 且无路由级提示时默认 high。
@@ -348,18 +278,6 @@ fn inject_trae_outbound(
             serde_json::to_vec(&obj).unwrap_or(body_vec)
         }
         _ => body_vec,
-    }
-}
-
-/// 模型级冷却快速失败（T2.7/F-34：优先级高于 Key 级）。
-/// 审查 #21：剩余秒数按调用方档位视图取——此前固定走 CN wb 档便捷包装，
-/// buddy-ai 模型冷却时（独立冷却表有值）客户端拿到 "retry after 0s"
-fn model_cooling_response(view: &wb_route::WbView, model: &str, proto: Protocol) -> Response {
-    let rem = wb_route::model_cooling_remaining(view, model).unwrap_or(0);
-    let msg = format!("model {} cooling down, retry after {}s", model, rem);
-    match proto {
-        Protocol::Anthropic => anthropic_error(StatusCode::TOO_MANY_REQUESTS, "rate_limit_error", &msg),
-        _ => openai_error(StatusCode::TOO_MANY_REQUESTS, "model_cooldown", &msg),
     }
 }
 
@@ -1260,11 +1178,8 @@ pub async fn chat_completions(
         ),
         Ok(r) => match r.pool {
             // buddy-ai（阶段 2）：与 Buddy 档共用执行内核，视图按池分流
-            // 审查修复备案：/v1/chat 与 /v1/responses 的 Intl 分流存在已知不对称——
-            // 本路径 Intl 专属模型（buddy_intl_only）经 dispatch available 门控
-            // （Buddy(CN) 池不服务该模型）走 buddy-ai 国际池，而 /v1/responses 在
-            // wb 开启时会把同模型投 CN 上游；与蓝本同位一致，属有意设计——
-            // 若要统一需改 resolve_wb_target 签名波及多处调用，暂不处理。
+            // Intl 专属模型（buddy_intl_only）经 dispatch available 门控只会命中
+            // buddy-ai 池；/v1/responses 现已走同一 dispatch，分流口径与本节一致。
             TargetPool::Buddy | TargetPool::BuddyAi => {
                 // T5.3 默认深度思考：客户端未带 reasoning_effort 时注入 high
                 let explicit = peek.get("reasoning_effort").and_then(|v| v.as_str()).is_some();
@@ -1287,7 +1202,7 @@ pub async fn chat_completions(
                 if stream {
                     return super::qoder_route::qoder_stream_chat(state_clone, body_vec, r.model, start_ts, Protocol::OpenAi, key_str, guard, std::collections::HashSet::new(), r.fallback_chain);
                 }
-                return super::qoder_route::qoder_aggregate_chat(state_clone, body_vec, r.model, stream, start_ts, Protocol::OpenAi, key_str, guard).await;
+                return super::qoder_route::qoder_aggregate_chat(state_clone, body_vec, r.model, stream, start_ts, Protocol::OpenAi, key_str, guard, std::collections::HashSet::new()).await;
             }
             TargetPool::Trae => {
                 // issue #31 T3.2/T3.3：Trae 池 effort 通道（默认思考两池对齐）——
@@ -1302,9 +1217,9 @@ pub async fn chat_completions(
                     &state.data_dir, body_vec, wire, r.max_mode_hint, ctx_max, &model, &r.model,
                 );
                 if stream {
-                    stream_chat(state_clone, body_vec, r.model, stream, start_ts, Protocol::OpenAi, key_str, guard, r.fallback_chain)
+                    stream_chat(state_clone, body_vec, r.model, stream, start_ts, Protocol::OpenAi, key_str, guard, r.fallback_chain, std::collections::HashSet::new())
                 } else {
-                    aggregate_chat(state_clone, body_vec, r.model, stream, start_ts, Protocol::OpenAi, key_str, guard).await
+                    aggregate_chat(state_clone, body_vec, r.model, stream, start_ts, Protocol::OpenAi, key_str, guard, std::collections::HashSet::new()).await
                 }
             }
             TargetPool::Custom => {
@@ -1314,9 +1229,9 @@ pub async fn chat_completions(
                 if group.is_empty() {
                     openai_error(StatusCode::NOT_FOUND, "model_not_found", &format!("自定义模型 {} 已被删除", model))
                 } else if stream {
-                    custom_route::custom_stream_chat(state_clone, body_vec, r.model, group, start_ts, Protocol::OpenAi, key_str, guard)
+                    custom_route::custom_stream_chat(state_clone, body_vec, r.model, group, start_ts, Protocol::OpenAi, key_str, guard, std::collections::HashSet::new())
                 } else {
-                    custom_route::custom_aggregate_chat(state_clone, body_vec, r.model, group, stream, start_ts, Protocol::OpenAi, key_str, guard).await
+                    custom_route::custom_aggregate_chat(state_clone, body_vec, r.model, group, stream, start_ts, Protocol::OpenAi, key_str, guard, std::collections::HashSet::new()).await
                 }
             }
         },
@@ -1325,8 +1240,13 @@ pub async fn chat_completions(
 
 /// Codex Responses API 端点（T4.1/F-40）：POST /v1/responses
 ///
-/// 请求投影为 OpenAI 内部格式后复用 WB 上游既有管线（取号/重试/粘性/脱敏一份）。
-/// 仅支持 WB 上游模型（Codex CLI `wire_api="responses"` 直配 base_url 的目标场景）；
+/// 请求投影为 OpenAI chat 内部格式后进入**统一调度器**（与 /v1/chat/completions
+/// 同一套 Key 绑定 / per_model / priority / Smart / 前缀锁池 / 跨池回退），再按
+/// 命中池分派：
+/// - Buddy / BuddyAI：复用 WB Responses 专用管线（流式 / 伪流式 / 聚合）；
+/// - Qoder：agent 信封执行，流式与聚合并按 Responses 投影；
+/// - Trae：SOLO 管线，Responses 输出由 `sse::stream_convert_responses_lines` 投影；
+/// - Custom：上游组轮换，流式/聚合同样按 Responses 投影。
 /// 脱敏沿用全局 `wb_sanitize` 开关，审核命中按既有分级重试表退回重试。
 pub async fn responses_api(
     State(state): State<Arc<ApiSharedState>>,
@@ -1385,83 +1305,212 @@ pub async fn responses_api(
     // inflight guard：随执行路径持有至请求结束（§4.5）
     let guard = state.inflight_guard();
 
-    // T5.2/F-61 四段路由解析（Responses 仅支持 WB 上游模型）
-    let (resolved_model, route_hint) = match resolve_wb_target(&state, &model, &chat_body) {
-        Some(t) => t,
-        None => {
-            return openai_error(
-                StatusCode::BAD_REQUEST,
-                "model_not_found",
-                &format!(
-                    "model {} is not a WorkBuddy upstream model（/v1/responses 仅支持 WB 上游模型，目录见 /v1/models）",
-                    model
-                ),
-            );
-        }
-    };
-    // buddy-ai（阶段 2）：wb 档关闭且国际档开启时走国际池（与 /v1/chat 的
-    // priority 语义一致：buddy 优先、buddy-ai 兜底；wb 开时保持现状 CN 路径）
-    // 审查修复备案：/v1/responses 与 /v1/chat 的 Intl 分流存在已知不对称——wb 开启时
-    // Intl 专属模型（buddy_intl_only；/v1/chat 经 dispatch available 门控不走 CN 池）
-    // 在此处因 `buddy_ai = !wb_enabled && buddy_ai_enabled` 可能投给 CN 上游；
-    // 与蓝本同位一致，属有意设计——若要统一需改 resolve_wb_target 签名波及多处调用，暂不处理。
-    let wb_enabled = state.wb_enabled.load(std::sync::atomic::Ordering::Relaxed);
-    let buddy_ai_enabled = state
-        .buddy_ai_enabled
-        .load(std::sync::atomic::Ordering::Relaxed);
-    let buddy_ai = !wb_enabled && buddy_ai_enabled;
-    if !wb_enabled && !buddy_ai_enabled {
-        return openai_error(
-            StatusCode::BAD_REQUEST,
-            "wb_upstream_disabled",
-            "WB 上游未启用（api_pool.json wb_enabled）",
-        );
-    }
-    {
-        let view = if buddy_ai {
-            wb_route::WbView::intl(state.clone())
-        } else {
-            wb_route::WbView::wb(state.clone())
-        };
-        if wb_route::model_cooling_remaining(&view, &resolved_model).is_some() {
-            return model_cooling_response(&view, &resolved_model, Protocol::Responses);
-        }
-    }
-
+    // 统一调度（§4.1 ②~⑥）：/v1/responses 与 /v1/chat/completions 同源选池——
+    // Key 绑定 / per_model / priority / Smart / 前缀锁池 / 跨池回退全部生效。
+    // 此前本端点走 resolve_wb_target 单向上游判定，导致「Codex 经 CC Switch 只进
+    // Buddy 池、限定其他平台账号的同名模型 503、非 Buddy 目录模型 400」。
+    // 入参用 chat_body（含 messages）以便粘性键/后台任务/长上下文判定与 chat 路径同口径。
     let mut chat_body = chat_body;
-    // T5.5/F-64 工具代执行：客户端声明 web_search 类工具且开关开启 → 代理侧代执行编排
-    if state.wb_tool_exec.load(std::sync::atomic::Ordering::Relaxed)
-        && super::wb_toolexec::responses_declares_web_search(&peek)
-    {
-        return wb_route::wb_tool_exec_chat(
-            state_clone,
-            buddy_ai,
-            chat_body,
-            resolved_model,
-            stream,
-            start_ts,
-            key_str,
-            guard,
-            encoded_tools,
-        )
-        .await;
-    }
+    // responses_to_chat 只产出内部 chat 字段（不含 model）——执行层（Trae SOLO
+    // payload / 自定义组重建 / Qoder 信封）都依赖 body.model，必须原样回填
+    // 客户端请求名；各池执行前的改名（如 trae 前缀/后缀剥离）由既有注入逻辑完成。
+    chat_body["model"] = json!(model);
     chat_body["stream"] = json!(stream);
-    // T5.3 默认深度思考（Responses: reasoning.effort 已投影为 reasoning_effort）
-    let explicit = chat_body.get("reasoning_effort").and_then(|v| v.as_str()).is_some();
-    let hint = effective_effort_hint(&state, route_hint, explicit);
-    let body_vec = apply_effort_hint(serde_json::to_vec(&chat_body).unwrap_or_default(), hint);
-
-    // issue #213 S6 伪流式分流：开关开时走聚合内核合成 SSE（断流/空完成全可无损
-    // 换号重试）；encoded 集合同传（Responses 合成 delta 需排除已编码工具名）。
-    // 注：wb_tool_exec_chat 路径不走伪流式分流（内部已是非流式聚合 + 合成 SSE）
-    if stream && state.pseudo_stream_on(buddy_ai) {
-        return wb_route::wb_pseudo_stream(state_clone, buddy_ai, body_vec, resolved_model, start_ts, Protocol::Responses, key_str, guard, encoded_tools, Vec::new());
-    }
-    if stream {
-        wb_route::wb_stream_chat(state_clone, buddy_ai, body_vec, resolved_model, start_ts, Protocol::Responses, key_str, guard, encoded_tools, Vec::new())
-    } else {
-        wb_route::wb_aggregate_chat(state_clone, buddy_ai, body_vec, resolved_model, stream, start_ts, Protocol::Responses, key_str, guard, encoded_tools).await
+    let explicit = chat_body
+        .get("reasoning_effort")
+        .and_then(|v| v.as_str())
+        .is_some();
+    match dispatch::resolve_target(&state, &model, &chat_body, Some(&key_str)) {
+        Err(e) => dispatch_error_response(
+            &state, e, Protocol::Responses, &model, stream, &key_str,
+            start_ts.elapsed().as_millis() as u64,
+        ),
+        Ok(r) => match r.pool {
+            // Buddy（CN）/ BuddyAI（Intl）：沿用既有 WB Responses 管线
+            TargetPool::Buddy | TargetPool::BuddyAi => {
+                let buddy_ai = r.pool == TargetPool::BuddyAi;
+                // T5.5/F-64 工具代执行：客户端声明 web_search 类工具且开关开启
+                // → 代理侧代执行编排（仅 WB 池具备该内核）
+                if state.wb_tool_exec.load(std::sync::atomic::Ordering::Relaxed)
+                    && super::wb_toolexec::responses_declares_web_search(&peek)
+                {
+                    return wb_route::wb_tool_exec_chat(
+                        state_clone,
+                        buddy_ai,
+                        chat_body,
+                        r.model,
+                        stream,
+                        start_ts,
+                        key_str,
+                        guard,
+                        encoded_tools,
+                    )
+                    .await;
+                }
+                let hint = effective_effort_hint(&state, r.effort_hint, explicit);
+                let body_vec =
+                    apply_effort_hint(serde_json::to_vec(&chat_body).unwrap_or_default(), hint);
+                // issue #213 S6 伪流式分流：开关开时走聚合内核合成 SSE
+                //（断流/空完成可无损换号；encoded 集合随投影还原 namespace 工具名）
+                if stream && state.pseudo_stream_on(buddy_ai) {
+                    return wb_route::wb_pseudo_stream(
+                        state_clone,
+                        buddy_ai,
+                        body_vec,
+                        r.model,
+                        start_ts,
+                        Protocol::Responses,
+                        key_str,
+                        guard,
+                        encoded_tools,
+                        r.fallback_chain,
+                    );
+                }
+                if stream {
+                    return wb_route::wb_stream_chat(
+                        state_clone,
+                        buddy_ai,
+                        body_vec,
+                        r.model,
+                        start_ts,
+                        Protocol::Responses,
+                        key_str,
+                        guard,
+                        encoded_tools,
+                        r.fallback_chain,
+                    );
+                }
+                return wb_route::wb_aggregate_chat(
+                    state_clone,
+                    buddy_ai,
+                    body_vec,
+                    r.model,
+                    stream,
+                    start_ts,
+                    Protocol::Responses,
+                    key_str,
+                    guard,
+                    encoded_tools,
+                )
+                .await;
+            }
+            // Qoder：入参已是 OpenAI 内部格式；执行路径负责构造 agent 信封
+            TargetPool::Qoder => {
+                let body_vec = serde_json::to_vec(&chat_body).unwrap_or_default();
+                if stream {
+                    return super::qoder_route::qoder_stream_chat(
+                        state_clone,
+                        body_vec,
+                        r.model,
+                        start_ts,
+                        Protocol::Responses,
+                        key_str,
+                        guard,
+                        encoded_tools,
+                        r.fallback_chain,
+                    );
+                }
+                return super::qoder_route::qoder_aggregate_chat(
+                    state_clone,
+                    body_vec,
+                    r.model,
+                    stream,
+                    start_ts,
+                    Protocol::Responses,
+                    key_str,
+                    guard,
+                    encoded_tools,
+                )
+                .await;
+            }
+            // Trae SOLO：effort wire / Max Mode 注入后走 SOLO 管线，
+            // Responses 输出由 sse::stream_convert_responses_lines 投影
+            TargetPool::Trae => {
+                let explicit_effort = chat_body
+                    .get("reasoning_effort")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string);
+                let wire =
+                    trae_effort_wire(&state, r.effort_hint, explicit_effort, &r.model);
+                let ctx_max = super::context_window::trae_wants_max(&state.data_dir, &r.model);
+                let body_vec = inject_trae_outbound(
+                    &state.data_dir,
+                    serde_json::to_vec(&chat_body).unwrap_or_default(),
+                    wire,
+                    r.max_mode_hint,
+                    ctx_max,
+                    &model,
+                    &r.model,
+                );
+                if stream {
+                    stream_chat(
+                        state_clone,
+                        body_vec,
+                        r.model,
+                        stream,
+                        start_ts,
+                        Protocol::Responses,
+                        key_str,
+                        guard,
+                        r.fallback_chain,
+                        encoded_tools,
+                    )
+                } else {
+                    aggregate_chat(
+                        state_clone,
+                        body_vec,
+                        r.model,
+                        stream,
+                        start_ts,
+                        Protocol::Responses,
+                        key_str,
+                        guard,
+                        encoded_tools,
+                    )
+                    .await
+                }
+            }
+            // 自定义模型上游组：同名多条 = 组内负载均衡/熔断切换
+            TargetPool::Custom => {
+                let group = super::custom_models::find_enabled_all(&state.data_dir, &r.model);
+                if group.is_empty() {
+                    openai_error(
+                        StatusCode::NOT_FOUND,
+                        "model_not_found",
+                        &format!("自定义模型 {} 已被删除", model),
+                    )
+                } else {
+                    let body_vec = serde_json::to_vec(&chat_body).unwrap_or_default();
+                    if stream {
+                        custom_route::custom_stream_chat(
+                            state_clone,
+                            body_vec,
+                            r.model,
+                            group,
+                            start_ts,
+                            Protocol::Responses,
+                            key_str,
+                            guard,
+                            encoded_tools,
+                        )
+                    } else {
+                        custom_route::custom_aggregate_chat(
+                            state_clone,
+                            body_vec,
+                            r.model,
+                            group,
+                            stream,
+                            start_ts,
+                            Protocol::Responses,
+                            key_str,
+                            guard,
+                            encoded_tools,
+                        )
+                        .await
+                    }
+                }
+            }
+        },
     }
 }
 
@@ -1673,7 +1722,7 @@ pub async fn messages(
                 if stream {
                     return super::qoder_route::qoder_stream_chat(state_clone, body_vec, r.model, start_ts, Protocol::Anthropic, key_str, guard, std::collections::HashSet::new(), r.fallback_chain);
                 }
-                return super::qoder_route::qoder_aggregate_chat(state_clone, body_vec, r.model, stream, start_ts, Protocol::Anthropic, key_str, guard).await;
+                return super::qoder_route::qoder_aggregate_chat(state_clone, body_vec, r.model, stream, start_ts, Protocol::Anthropic, key_str, guard, std::collections::HashSet::new()).await;
             }
             TargetPool::Trae => {
                 // issue #31 T3.2/T3.3：Anthropic thinking 参数视为显式请求
@@ -1698,9 +1747,9 @@ pub async fn messages(
                     &state.data_dir, body_vec, wire, r.max_mode_hint, ctx_max, &model, &r.model,
                 );
                 if stream {
-                    stream_chat(state_clone, body_vec, r.model, stream, start_ts, Protocol::Anthropic, key_str, guard, r.fallback_chain)
+                    stream_chat(state_clone, body_vec, r.model, stream, start_ts, Protocol::Anthropic, key_str, guard, r.fallback_chain, std::collections::HashSet::new())
                 } else {
-                    aggregate_chat(state_clone, body_vec, r.model, stream, start_ts, Protocol::Anthropic, key_str, guard).await
+                    aggregate_chat(state_clone, body_vec, r.model, stream, start_ts, Protocol::Anthropic, key_str, guard, std::collections::HashSet::new()).await
                 }
             }
             TargetPool::Custom => {
@@ -1709,9 +1758,9 @@ pub async fn messages(
                 if group.is_empty() {
                     anthropic_error(StatusCode::NOT_FOUND, "model_not_found", &format!("自定义模型 {} 已被删除", model))
                 } else if stream {
-                    custom_route::custom_stream_chat(state_clone, body_vec, r.model, group, start_ts, Protocol::Anthropic, key_str, guard)
+                    custom_route::custom_stream_chat(state_clone, body_vec, r.model, group, start_ts, Protocol::Anthropic, key_str, guard, std::collections::HashSet::new())
                 } else {
-                    custom_route::custom_aggregate_chat(state_clone, body_vec, r.model, group, stream, start_ts, Protocol::Anthropic, key_str, guard).await
+                    custom_route::custom_aggregate_chat(state_clone, body_vec, r.model, group, stream, start_ts, Protocol::Anthropic, key_str, guard, std::collections::HashSet::new()).await
                 }
             }
         },
@@ -1833,7 +1882,7 @@ pub async fn completions(
                 if stream {
                     return super::qoder_route::qoder_stream_chat(state_clone, body_vec, r.model, start_ts, Protocol::OpenAiText, key_str, guard, std::collections::HashSet::new(), r.fallback_chain);
                 }
-                return super::qoder_route::qoder_aggregate_chat(state_clone, body_vec, r.model, stream, start_ts, Protocol::OpenAiText, key_str, guard).await;
+                return super::qoder_route::qoder_aggregate_chat(state_clone, body_vec, r.model, stream, start_ts, Protocol::OpenAiText, key_str, guard, std::collections::HashSet::new()).await;
             }
             TargetPool::Trae => {
                 // issue #31 T3.2/T3.3：text completions 无 effort 字段 → 仅默认思考生效
@@ -1843,9 +1892,9 @@ pub async fn completions(
                     &state.data_dir, body_vec, wire, r.max_mode_hint, ctx_max, &model, &r.model,
                 );
                 if stream {
-                    stream_chat(state_clone, body_vec, r.model, stream, start_ts, Protocol::OpenAiText, key_str, guard, r.fallback_chain)
+                    stream_chat(state_clone, body_vec, r.model, stream, start_ts, Protocol::OpenAiText, key_str, guard, r.fallback_chain, std::collections::HashSet::new())
                 } else {
-                    aggregate_chat(state_clone, body_vec, r.model, stream, start_ts, Protocol::OpenAiText, key_str, guard).await
+                    aggregate_chat(state_clone, body_vec, r.model, stream, start_ts, Protocol::OpenAiText, key_str, guard, std::collections::HashSet::new()).await
                 }
             }
             TargetPool::Custom => {
@@ -1854,9 +1903,9 @@ pub async fn completions(
                 if group.is_empty() {
                     openai_error(StatusCode::NOT_FOUND, "model_not_found", &format!("自定义模型 {} 已被删除", model))
                 } else if stream {
-                    custom_route::custom_stream_chat(state_clone, body_vec, r.model, group, start_ts, Protocol::OpenAiText, key_str, guard)
+                    custom_route::custom_stream_chat(state_clone, body_vec, r.model, group, start_ts, Protocol::OpenAiText, key_str, guard, std::collections::HashSet::new())
                 } else {
-                    custom_route::custom_aggregate_chat(state_clone, body_vec, r.model, group, stream, start_ts, Protocol::OpenAiText, key_str, guard).await
+                    custom_route::custom_aggregate_chat(state_clone, body_vec, r.model, group, stream, start_ts, Protocol::OpenAiText, key_str, guard, std::collections::HashSet::new()).await
                 }
             }
         },
@@ -2032,7 +2081,7 @@ pub(crate) fn trae_pool_constraints(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn stream_chat(state: Arc<ApiSharedState>, body_vec: Vec<u8>, model: String, stream: bool, start_ts: std::time::Instant, proto: Protocol, key_id: String, guard: InflightGuard, fallback: Vec<super::dispatch::PoolCandidate>) -> Response {
+fn stream_chat(state: Arc<ApiSharedState>, body_vec: Vec<u8>, model: String, stream: bool, start_ts: std::time::Instant, proto: Protocol, key_id: String, guard: InflightGuard, fallback: Vec<super::dispatch::PoolCandidate>, encoded: HashSet<String>) -> Response {
     let (tx, rx) = tokio::sync::mpsc::channel(64);
 
     // SSE keep-alive 15s（T2.7/F-34 §5.5 #7）：防中间层回收长流。
@@ -2310,10 +2359,13 @@ fn stream_chat(state: Arc<ApiSharedState>, body_vec: Vec<u8>, model: String, str
                                 );
                                 (e, s, u)
                             }
-                            // Responses 仅走 WB 上游；solo 管线兜底按 OpenAI 透传
+                            // Responses：SOLO SSE → Codex Responses 事件流
+                            // （created → output_text.delta → function_call → completed）
                             Protocol::Responses => {
-                                let (e, s, u) =
-                                    sse::stream_convert_lines(lines, tx.clone(), &chat_id, tool_alias.as_ref());
+                                let (e, s, u) = sse::stream_convert_responses_lines(
+                                    lines, tx.clone(), &chat_id, &model, &encoded,
+                                    tool_alias.as_ref(),
+                                );
                                 (e, s, u)
                             }
                         };
@@ -2656,7 +2708,7 @@ fn stream_chat(state: Arc<ApiSharedState>, body_vec: Vec<u8>, model: String, str
         // 审查 A-1：usage 行后置到移交失败之后——移交成功由接收池落终态用量
         //（含真实账号），本池不再补 "none" 行，避免同一请求两条用量行（双记账）
         if !fallback.is_empty() && !tx.is_closed() {
-            let ok = super::cross_pool::continue_stream_on_next_pool(&state, "trae", &fallback, &body_vec, proto, &key_id, &chat_id, &tx, guard, &std::collections::HashSet::new(), start_ts);
+            let ok = super::cross_pool::continue_stream_on_next_pool(&state, "trae", &fallback, &body_vec, proto, &key_id, &chat_id, &tx, guard, &encoded, start_ts);
             if ok { return; }
         }
         state.record_usage(false, &model, "none", &key_id, false, true, duration_ms, 0, 0);
@@ -2749,11 +2801,12 @@ fn stream_chat(state: Arc<ApiSharedState>, body_vec: Vec<u8>, model: String, str
 
 // ==================== Non-streaming ====================
 
-async fn aggregate_chat(state: Arc<ApiSharedState>, body_vec: Vec<u8>, model: String, stream: bool, start_ts: std::time::Instant, proto: Protocol, key_id: String, guard: InflightGuard) -> Response {
+async fn aggregate_chat(state: Arc<ApiSharedState>, body_vec: Vec<u8>, model: String, stream: bool, start_ts: std::time::Instant, proto: Protocol, key_id: String, guard: InflightGuard, encoded: HashSet<String>) -> Response {
     // P2 修复：聚合含分级重试（RetrySame 退避 std::thread::sleep 最长 60s×N），
     // 长阻塞占主池会饿死鉴权等短任务，迁入 stream_runtime 专用阻塞池。
     // Key 绑定 trae 的约束在闭包外解析（clone 进闭包，锁外取号）
     let (trae_allowed, trae_dedicated) = trae_pool_constraints(&state, &key_id);
+    let model_outer = model.clone();
     let result = super::stream_runtime().spawn_blocking(move || {
         // inflight guard 随后台任务存续至聚合完成（§4.5）；F-77 取号后绑定账号级计数
         let mut guard = guard;
@@ -3230,15 +3283,28 @@ async fn aggregate_chat(state: Arc<ApiSharedState>, body_vec: Vec<u8>, model: St
     .await;
 
     match result {
-        Ok(Ok(resp)) => Response::builder()
-            .header("content-type", "application/json")
-            .body(Body::from(resp.to_string()))
-            .unwrap_or_else(|_| {
-                Response::builder()
-                    .status(StatusCode::INTERNAL_SERVER_ERROR)
-                    .body(Body::from("internal server error"))
-                    .unwrap()
-            }),
+        Ok(Ok(resp)) => {
+            // Trae SOLO 聚合产物为 OpenAI completion，Responses 协议需投影为
+            // response 对象（/v1/responses 统一调度分支）
+            let body = match proto {
+                Protocol::Responses => super::wb_responses::completion_to_responses(
+                    &resp,
+                    &format!("resp_{}", now_ts()),
+                    &model_outer,
+                    &encoded,
+                ),
+                _ => resp,
+            };
+            Response::builder()
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap_or_else(|_| {
+                    Response::builder()
+                        .status(StatusCode::INTERNAL_SERVER_ERROR)
+                        .body(Body::from("internal server error"))
+                        .unwrap()
+                })
+        }
         Ok(Err(AggregateFail::NoHealthy(msg))) => match proto {
             Protocol::OpenAi | Protocol::OpenAiText | Protocol::Responses => {
                 openai_error(StatusCode::SERVICE_UNAVAILABLE, "no_healthy_account", &msg)
@@ -3878,6 +3944,8 @@ mod tests {
             vendor: String::new(),
             region: None,
             rate: None,
+            rate_base: None,
+            rate_window: None,
             efforts: vec![],
             max_mode: false,
             context_length: None,
@@ -3954,6 +4022,76 @@ mod tests {
             assert!(out.len() <= n);
             assert!(body.starts_with(out));
         }
+    }
+
+    // ==================== /v1/responses 统一调度（issue：Codex 只进 buddy） ====================
+
+    /// /v1/responses 必须与 /v1/chat/completions 同源选池：Buddy 目录模型但池内
+    /// 0 账号时返回统一调度的 503（pool=buddy），而非旧实现绕过调度后的
+    /// 400 "not a WorkBuddy upstream model" / 只进 Buddy 的假象
+    #[tokio::test]
+    async fn responses_uses_unified_dispatch_buddy_source() {
+        let f = wl_fixture("responses_dispatch_buddy");
+        let body = axum::body::Bytes::from(
+            r#"{"model":"glm-5.3","input":"hi","stream":false}"#,
+        );
+        let resp = super::responses_api(
+            axum::extract::State(f.state.clone()),
+            None,
+            body,
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(v["error"]["code"], "no_healthy_account");
+        let msg = v["error"]["message"].as_str().unwrap();
+        // 关键回归：必须走统一调度（带逐池候选归因），而非旧的
+        // "not a WorkBuddy upstream model" 400
+        assert!(msg.contains("candidates="), "{msg}");
+        assert!(!msg.contains("仅支持 WB 上游模型"), "{msg}");
+    }
+
+    /// 池前缀锁池在 /v1/responses 同样生效：trae/glm-5.3 强制 Trae 池（503
+    /// pool=trae），证明前缀不再被当作未知模型 400
+    #[tokio::test]
+    async fn responses_honors_pool_prefix() {
+        let f = wl_fixture("responses_dispatch_prefix");
+        let body = axum::body::Bytes::from(
+            r#"{"model":"trae/glm-5.3","input":"hi","stream":false}"#,
+        );
+        let resp = super::responses_api(
+            axum::extract::State(f.state.clone()),
+            None,
+            body,
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(v["error"]["code"], "no_healthy_account");
+        assert!(v["error"]["message"].as_str().unwrap().contains("pool=trae"));
+    }
+
+    /// 非 Buddy 目录模型走 Trae 透传语义（与 /v1/chat 一致），不再被
+    /// "仅支持 WB 上游模型" 的 400 提前拦截
+    #[tokio::test]
+    async fn responses_passes_unknown_model_to_trae_passthrough() {
+        let f = wl_fixture("responses_dispatch_passthrough");
+        let body = axum::body::Bytes::from(
+            r#"{"model":"brand-new-solo-model","input":"hi","stream":false}"#,
+        );
+        let resp = super::responses_api(
+            axum::extract::State(f.state.clone()),
+            None,
+            body,
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(v["error"]["code"], "no_healthy_account");
+        assert!(v["error"]["message"].as_str().unwrap().contains("pool=trae"));
     }
 
     // ==================== issue #26 全局模型白名单 ====================

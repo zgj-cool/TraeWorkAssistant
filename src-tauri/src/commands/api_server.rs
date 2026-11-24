@@ -2748,6 +2748,45 @@ pub fn trae_model_meta_clear(state: State<'_, AppState>, model: String) -> Resul
     crate::api_server::unified_catalog::meta_clear(&state.data_dir, &model)
 }
 
+// ==================== 池级人工覆盖层（Buddy/Qoder 目录编辑，kv pool_model_meta） ====================
+
+/// Buddy/Qoder 模型目录人工覆盖读取（编辑弹框回显用；None = 无人工值，交由上游同步值）
+#[tauri::command]
+pub fn pool_model_meta_get(
+    state: State<'_, AppState>,
+    pool: String,
+    model: String,
+) -> Option<crate::api_server::unified_catalog::TraeModelMeta> {
+    use crate::api_server::unified_catalog as uc;
+    let key = match pool.as_str() {
+        "buddy" => uc::pool_meta_key("buddy", &model),
+        "qoder" => uc::pool_meta_key("qoder", &model),
+        _ => return None,
+    };
+    uc::load_pool_meta(&state.data_dir).remove(&key)
+}
+
+/// Buddy/Qoder 模型目录人工覆盖写入（upsert；编辑弹框保存，上游目录同步不覆盖）
+#[tauri::command]
+pub fn pool_model_meta_set(
+    state: State<'_, AppState>,
+    pool: String,
+    model: String,
+    meta: crate::api_server::unified_catalog::TraeModelMeta,
+) -> Result<(), String> {
+    crate::api_server::unified_catalog::pool_meta_set(&state.data_dir, &pool, &model, meta)
+}
+
+/// 清除池级人工覆盖（恢复上游同步值）；返回是否存在过
+#[tauri::command]
+pub fn pool_model_meta_clear(
+    state: State<'_, AppState>,
+    pool: String,
+    model: String,
+) -> Result<bool, String> {
+    crate::api_server::unified_catalog::pool_meta_clear(&state.data_dir, &pool, &model)
+}
+
 // ==================== 按模型长上下文（按池隔离：Trae 开关 / Qoder 数值） ====================
 
 /// Trae 长上下文开关视图：已开启的模型（canonical_id）；未列出 = 跟随上游

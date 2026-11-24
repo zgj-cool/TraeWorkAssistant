@@ -555,8 +555,24 @@ pub fn resolve_target(
         None
     };
     let buddy_intl_only = intl_hit.is_some();
-    let buddy_hit = super::wb_catalog::find(&catalog, &r.model)
-            .map(|_| {
+    // Buddy/Qoder 池级人工覆盖（kv pool_model_meta，issue #145 跨池扩展）：
+    // enabled=false 时该池不再作为此模型的源参与调度（目录条目保留、管理端可
+    // 重新启用）。仅门控 CN 目录命中——Intl 专属/双收录折入（buddy-ai 池）
+    // 不受 buddy 池级开关影响（国际池独立开关与冷却失败域）
+    let pool_meta = super::unified_catalog::load_pool_meta(&state.data_dir);
+    let pool_meta_enabled = |pool: &str, canonical: &str| {
+        pool_meta
+            .get(&super::unified_catalog::pool_meta_key(pool, canonical))
+            .and_then(|m| m.enabled)
+            .map_or(true, |e| e)
+    };
+    let buddy_cn_hit = if pool_meta_enabled("buddy", &canonical_id(&r.model)) {
+        super::wb_catalog::find(&catalog, &r.model)
+    } else {
+        None
+    };
+    let buddy_hit = buddy_cn_hit
+        .map(|_| {
                 // T5.6③ 后台任务降级（显式开启才生效）：标题/摘要类短请求 → 目录最低倍率模型
                 // issue #26 白名单感知：降级候选 ∩ 白名单为空则跳过降级（原模型已过端点准入）
                 // Intl 专属请求跳过降级：降级候选出自 CN 目录，替换后的模型 id 发往
@@ -640,7 +656,9 @@ pub fn resolve_target(
     // 执行，区域分流见 qoder_route 注释。final model 取目录归一化 id。
     // v1 不做路由后缀剥离（-thinking/-max 是 WB/Trae 侧机制），请求素材由执行路径按条目再查
     let qoder_hit = qoder_upstream::resolve(model, qoder_upstream::QoderRegion::Cn)
-        .and_then(|entry| entry.get("id").and_then(Value::as_str).map(str::to_string));
+        .and_then(|entry| entry.get("id").and_then(Value::as_str).map(str::to_string))
+        // 池级人工开关（pool_model_meta.enabled=false）→ Qoder 源剔除
+        .filter(|id| pool_meta_enabled("qoder", &canonical_id(id)));
     let trae_final = if buddy_hit.is_none() {
         if in_trae(model) {
             // 整名命中：真模型名透传，不做任何后缀剥离
@@ -1090,12 +1108,27 @@ pub fn pool_session_key(body: &Value) -> Option<String> {
 
 // ==================== 智能调度（§4.2 DispatchStrategy::Smart） ====================
 
-/// 智能调度排序键：①最早积分到期（升序，无到期数据 = i64::MAX 后置）
+/// 智能调度排序键：①最早积分到期（`None` = 无到期数据，该维度不参与比较）
 /// ②模型倍率（升序，0 = 免费最优，未声明 = f64::MAX 后置）③健康积分总和多优先（负值升序）
-type SmartKey = (i64, f64, f64);
+///
+/// 到期键用 `Option<i64>` 而非 `i64::MAX` 占位：原实现把「无到期数据」压成
+/// 最大值恒后置，导致只要对侧池有到期时间（Buddy 常见）就**永久压制倍率键**——
+/// 闲时折扣把 Trae 降到 0.06x 也选不中（实测 12:00–14:00 仍走 Buddy）。
+/// 现语义：两侧都有到期数据才比到期（先到期先消耗），任一侧缺失即视为
+/// 「该维度无可比信息」，比较结果并列并下沉到倍率键，避免用缺失值当极小值。
+struct SmartKey {
+    /// 最早积分到期（Unix 秒）；None = 无到期信息
+    expire: Option<i64>,
+    /// 模型倍率（0 = 免费；未声明 = f64::MAX 后置）
+    rate: f64,
+    /// 健康账号剩余积分总和取负（升序即「积分多优先」）
+    neg_total: f64,
+}
 
 /// 双源候选池按「到期 → 倍率/免费 → 积分多」复合键稳定排序；
 /// 全并列保持传入序（= priority/per_model 固定优先级，Buddy 优先现状）。
+///
+/// 到期维度仅在**两侧都有数据**时生效（见 [`SmartKey::expire`] 说明）。
 fn smart_pool_order(
     state: &Arc<ApiSharedState>,
     order: &[TargetPool],
@@ -1109,35 +1142,74 @@ fn smart_pool_order(
     let qoder_stats = state.qoder_pool.stats();
     // 倍率数据源：Buddy = wb 目录原始值（0 = 免费）；Trae = 官网同步声明值（None = 未声明）；
     // Qoder = 目录 credits 文本解析（"x0.1 credits" → 0.1）。
-    // 各列表均为内存缓存，热路径零磁盘读
-    let trae_rate = models_sync::load_models(&state.data_dir)
+    // 各列表均为内存缓存，热路径零磁盘读。
+    //
+    // 闲时折扣（Trae）：官网同步写入的单一倍率只是「同步时刻」的快照（同一模型
+    // 闲时得 0.06、非闲时得 0.11），不能代表全天成本。此处叠加 L1 覆盖层的
+    // 时段规则（trae_model_meta.rate_windows）：当前处于折扣窗口 → 用折后倍率
+    // 参与排序，否则回落基准倍率。规则与目录聚合共用 unified_catalog 的同一判定，
+    // 保证「展示的倍率」与「调度依据」不漂移。
+    let trae_base = models_sync::load_models(&state.data_dir)
         .iter()
         .find(|m| canonical_id(&m.id) == canonical)
         .and_then(|m| m.rate);
+    let trae_meta = super::unified_catalog::load_meta(&state.data_dir);
+    let trae_rate = super::unified_catalog::effective_rate_now(
+        trae_meta.get(canonical),
+        trae_base,
+    )
+    .0;
+    // Buddy/Qoder 池级人工覆盖（kv pool_model_meta）：基准倍率修正 + 时段规则
+    // 与目录展示共用 unified_catalog 判定，保证「展示的倍率」与「调度依据」不漂移
+    let pool_meta = super::unified_catalog::load_pool_meta(&state.data_dir);
     let buddy_rate = sources
         .buddy
         .as_ref()
-        .and_then(|(m, _)| catalog.iter().find(|c| c.id == *m))
-        .map(|c| c.rate);
+        .and_then(|(m, _)| {
+            let base = catalog.iter().find(|c| c.id == *m).map(|c| c.rate);
+            Some(
+                super::unified_catalog::effective_rate_now(
+                    pool_meta.get(&super::unified_catalog::pool_meta_key(
+                        "buddy",
+                        &canonical_id(m),
+                    )),
+                    base,
+                )
+                .0,
+            )
+        })
+        .flatten();
     let qoder_rate = sources
         .qoder
         .as_ref()
         .and_then(|id| {
             // 免费活动覆盖同口径：开关开启时 Qwen3.8-Flash 按 0 倍率参与排序
-            //（免费最优），否则排序键与取号豁免口径分叉
-            qoder_upstream::list_overridden(
+            //（免费最优），否则排序键与取号豁免口径分叉；池级人工 rate 覆盖
+            // 活动值与目录 credits 解析值（显式人工 > 活动覆盖 > 上游）
+            let base = qoder_upstream::list_overridden(
                 state
                     .qoder_flash_free_rate
                     .load(std::sync::atomic::Ordering::Relaxed),
             )
             .into_iter()
             .find(|m| m.get("id").and_then(Value::as_str) == Some(id.as_str()))
+            .and_then(|m| {
+                m.get("credits")
+                    .and_then(Value::as_str)
+                    .and_then(qoder_upstream::credits_rate_of)
+            });
+            Some(
+                super::unified_catalog::effective_rate_now(
+                    pool_meta.get(&super::unified_catalog::pool_meta_key(
+                        "qoder",
+                        &canonical_id(id),
+                    )),
+                    base,
+                )
+                .0,
+            )
         })
-        .and_then(|m| {
-            m.get("credits")
-                .and_then(Value::as_str)
-                .and_then(qoder_upstream::credits_rate_of)
-        });
+        .flatten();
     // custom 组倍率键（v3 四池参与）：组内最小 rate 正常参与（rate=0 免费上游
     // 可在 Smart 下自然胜出）；到期/积分两键无数据按后置处理，不阻塞排序
     let custom_rate = sources
@@ -1156,24 +1228,29 @@ fn smart_pool_order(
             // 积分和 = f64::MIN（-total = f64::MAX，第三键后置）
             TargetPool::Custom => ((None, f64::MIN), custom_rate),
         };
-        (
-            earliest.unwrap_or(i64::MAX),
+        SmartKey {
+            expire: earliest.filter(|e| *e > 0),
             // issue #184 同源修复（smart 调度）：倍率键遇 NaN 哨兵（目录
             // rate:null → f64::NAN）时 partial_cmp→Equal 把该池与任意值并列、
             // 退化回稳定优先级序——NaN = 元数据缺失，与 None 同语义后置（MAX）
-            match rate {
+            rate: match rate {
                 Some(x) if !x.is_nan() => x,
                 _ => f64::MAX,
             },
-            -total,
-        )
+            neg_total: -total,
+        }
     };
     let mut sorted = order.to_vec();
     sorted.sort_by(|a, b| {
         let (ka, kb) = (key_of(*a), key_of(*b));
-        ka.0.cmp(&kb.0)
-            .then_with(|| ka.1.partial_cmp(&kb.1).unwrap_or(std::cmp::Ordering::Equal))
-            .then_with(|| ka.2.partial_cmp(&kb.2).unwrap_or(std::cmp::Ordering::Equal))
+        // 到期键：两侧都有数据才比较；任一侧缺失 = 该维度并列 → 下沉到倍率键
+        let expire_cmp = match (ka.expire, kb.expire) {
+            (Some(x), Some(y)) => x.cmp(&y),
+            _ => std::cmp::Ordering::Equal,
+        };
+        expire_cmp
+            .then_with(|| ka.rate.partial_cmp(&kb.rate).unwrap_or(std::cmp::Ordering::Equal))
+            .then_with(|| ka.neg_total.partial_cmp(&kb.neg_total).unwrap_or(std::cmp::Ordering::Equal))
     });
     sorted
 }
@@ -1581,6 +1658,28 @@ mod tests {
                     global_region: false,
                     credits: Some(10.0),
                     credits_expire_at: None,
+                    credits_fetched_at: None,
+                    needs_relogin: false,
+                    group_id: String::new(),
+                }],
+                &[if trae { "t1" } else { "b1" }.to_string()],
+            );
+        }
+
+        /// 往池里塞一个带**积分到期时间**的健康账号（credits_expire_at 语义验证用：
+        /// smart 到期键「先到期先消耗」与「无到期数据不压制倍率键」两处依赖该字段）
+        fn seed_healthy_expire(&self, trae: bool, expire_at: Option<i64>) {
+            let pool = if trae { &self.state.pool } else { &self.state.wb_pool };
+            pool.sync_from_wb(
+                &[super::super::pool::WbSyncAccount {
+                    uid: if trae { "t1" } else { "b1" }.into(),
+                    name: "acc".into(),
+                    token: "tk".into(),
+                    domain: if trae { String::new() } else { "d".into() },
+                    enterprise_id: String::new(),
+                    global_region: false,
+                    credits: Some(10.0),
+                    credits_expire_at: expire_at,
                     credits_fetched_at: None,
                     needs_relogin: false,
                     group_id: String::new(),
@@ -2817,6 +2916,139 @@ mod tests {
         f.seed_healthy(true);
         f.seed_healthy(false);
         assert_eq!(f.resolve("glm-5.3").unwrap().pool, TargetPool::Trae);
+    }
+
+    /// smart 到期键不再压制倍率键（缺陷回归）：Buddy 有到期时间、Trae 无
+    /// → 原实现把 Trae 的到期键压成 i64::MAX 恒后置，Trae 倍率再低也选不中。
+    /// 现语义：任一侧无到期数据 → 到期维度并列 → 由倍率键决定。
+    #[test]
+    fn t29b_smart_expire_key_does_not_shadow_rate() {
+        let f = fixture(&["glm-5.3"], Some(&["glm-5.3"]), Some(&policy_default()));
+        // Trae 倍率 0.06 明显低于 Buddy 目录 0.5
+        crate::store::db(&f.dir)
+            .kv_set("api_models", &json!([{"id": "glm-5.3", "label": "glm-5.3", "rate": 0.06}]))
+            .unwrap();
+        super::super::config_cache::invalidate(&f.dir, "api_models");
+        // Trae 无到期数据；Buddy 有到期时间（修复前：Buddy 靠到期键恒胜）
+        f.seed_healthy_expire(true, None);
+        f.seed_healthy_expire(false, Some(super::now_ts() + 86_400));
+        assert_eq!(
+            f.resolve("glm-5.3").unwrap().pool,
+            TargetPool::Trae,
+            "一侧无到期数据时不得压制倍率键（低倍率应胜出）"
+        );
+    }
+
+    /// 到期键在位时仍按「先到期先消耗」生效：两侧都有数据 → 先到期者胜出，
+    /// 即使其倍率更高（保证既能比倍率、也不丢原有临期优先语义）
+    #[test]
+    fn t29c_smart_expire_wins_when_both_declared() {
+        let f = fixture(&["glm-5.3"], Some(&["glm-5.3"]), Some(&policy_default()));
+        // Trae 倍率更低（0.06），但积分临期更晚；Buddy 倍率 0.5 但即将到期
+        crate::store::db(&f.dir)
+            .kv_set("api_models", &json!([{"id": "glm-5.3", "label": "glm-5.3", "rate": 0.06}]))
+            .unwrap();
+        super::super::config_cache::invalidate(&f.dir, "api_models");
+        let now = super::now_ts();
+        f.seed_healthy_expire(true, Some(now + 30 * 86_400));
+        f.seed_healthy_expire(false, Some(now + 86_400));
+        assert_eq!(
+            f.resolve("glm-5.3").unwrap().pool,
+            TargetPool::Buddy,
+            "两侧都有到期数据时先到期者优先（临期优先语义保留）"
+        );
+    }
+
+    /// 闲时折扣端到端：Trae 基准倍率高于 Buddy，但时段规则命中折后价更低
+    /// → 调度应改走 Trae。用两条互补窗口覆盖全天，不依赖测试运行时刻。
+    #[test]
+    fn t29d_smart_uses_discount_window_rate() {
+        let f = fixture(&["glm-5.3"], Some(&["glm-5.3"]), Some(&policy_default()));
+        // Trae 基准 0.9（高于 Buddy 目录 0.5）→ 无窗口规则时 Buddy 胜出
+        crate::store::db(&f.dir)
+            .kv_set(
+                "api_models",
+                &json!([{"id": "glm-5.3", "label": "glm-5.3", "rate": 0.9}]),
+            )
+            .unwrap();
+        super::super::config_cache::invalidate(&f.dir, "api_models");
+        f.seed_healthy(true);
+        f.seed_healthy(false);
+        assert_eq!(
+            f.resolve_no_session("glm-5.3").unwrap().pool,
+            TargetPool::Buddy,
+            "无时段规则时基准倍率更高 → 走 Buddy"
+        );
+
+        // 写入覆盖全天的闲时规则（0.06 < Buddy 0.5）→ 命中窗口后改走 Trae
+        crate::store::db(&f.dir)
+            .kv_set(
+                "trae_model_meta",
+                &json!({"glm-5.3": {"rate_windows": [
+                    {"start": "00:00", "end": "12:00", "rate": 0.06, "label": "闲时"},
+                    {"start": "12:00", "end": "00:00", "rate": 0.06, "label": "闲时"}
+                ]}}),
+            )
+            .unwrap();
+        super::super::config_cache::invalidate(&f.dir, "trae_model_meta");
+        assert_eq!(
+            f.resolve_no_session("glm-5.3").unwrap().pool,
+            TargetPool::Trae,
+            "闲时窗口内折后倍率更低 → 调度走 Trae"
+        );
+    }
+
+    /// Buddy 池级人工开关（pool_model_meta.enabled=false）：双源模型 Buddy 源剔除
+    /// → 走 Trae（issue #145 跨池扩展）；Buddy 倍率键同走池级覆盖与时段规则
+    #[test]
+    fn t29e_buddy_pool_meta_disabled_routes_trae() {
+        let f = fixture(&["glm-5.3"], Some(&["glm-5.3"]), Some(&policy_default()));
+        f.seed_healthy(true);
+        f.seed_healthy(false);
+        // 人工倍率覆盖 + 全窗口折扣（0.06 < Buddy 0.5）→ smart 倍率键本应 Buddy 胜出
+        crate::store::db(&f.dir)
+            .kv_set(
+                "pool_model_meta",
+                &json!({
+                    "buddy|glm-5.3": {
+                        "rate": 0.6,
+                        "rate_windows": [
+                            {"start": "00:00", "end": "12:00", "rate": 0.06, "label": "闲时"},
+                            {"start": "12:00", "end": "00:00", "rate": 0.06, "label": "闲时"}
+                        ]
+                    }
+                }),
+            )
+            .unwrap();
+        super::super::config_cache::invalidate(&f.dir, "pool_model_meta");
+        assert_eq!(
+            f.resolve_no_session("glm-5.3").unwrap().pool,
+            TargetPool::Buddy,
+            "池级人工倍率 0.06 < Buddy 目录 0.5 → Buddy 胜出（覆盖接入排序键）"
+        );
+
+        // 追加 enabled=false → Buddy 源剔除（尽管倍率更低），走 Trae
+        crate::store::db(&f.dir)
+            .kv_set(
+                "pool_model_meta",
+                &json!({
+                    "buddy|glm-5.3": {
+                        "enabled": false,
+                        "rate": 0.6,
+                        "rate_windows": [
+                            {"start": "00:00", "end": "12:00", "rate": 0.06, "label": "闲时"},
+                            {"start": "12:00", "end": "00:00", "rate": 0.06, "label": "闲时"}
+                        ]
+                    }
+                }),
+            )
+            .unwrap();
+        super::super::config_cache::invalidate(&f.dir, "pool_model_meta");
+        assert_eq!(
+            f.resolve_no_session("glm-5.3").unwrap().pool,
+            TargetPool::Trae,
+            "池级 enabled=false → Buddy 源剔除走 Trae（倍率再低也不路由禁用源）"
+        );
     }
 
     // ---------- Key 资源池绑定（issue #25） ----------

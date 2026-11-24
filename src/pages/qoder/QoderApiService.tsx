@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { RefreshCw, Save, Coins, ToggleLeft, Activity, Layers } from 'lucide-react';
+import { Pencil, RefreshCw, Save, Coins, ToggleLeft, Activity, Layers } from 'lucide-react';
 import PageHeader from '../../components/PageHeader';
 import { Badge, Spinner, StatCard } from '../../components/ui';
 import { PoolHealthBadges } from '../../components/api/PoolHealthBadges';
 import QoderContextLengthModal from '../../components/api/QoderContextLengthModal';
+import PoolModelMetaModal from '../../components/api/PoolModelMetaModal';
 import { api } from '../../lib/tauri';
 import { useAppStore } from '../../store';
 import { withMinDelay } from '../../lib/delay';
@@ -65,6 +66,8 @@ export default function QoderApiService() {
   // 渲染先判错误再判空，不再把失败当成功空集误报「暂无账号」引导
   const [accountsError, setAccountsError] = useState(false);
   const [models, setModels] = useState<UnifiedModel[]>([]);
+  // 池级人工覆盖编辑弹框（null = 关闭；生效字段 展示名/倍率/时段规则/启用）
+  const [metaEditing, setMetaEditing] = useState<UnifiedModel | null>(null);
   // 单模型上下文长度（kv qoder_context_length，仅 Qoder 池；与 Trae 页长上下文开关分表互不影响）
   const [ctxView, setCtxView] = useState<QoderContextLengthView | null>(null);
   const [ctxEditing, setCtxEditing] = useState<UnifiedModel | null>(null);
@@ -883,18 +886,56 @@ export default function QoderApiService() {
                         上下文长度设置
                       </th>
                       <th className="px-3 py-2 text-center">图片支持</th>
+                      <th className="px-3 py-2 text-center">操作</th>
                     </tr>
                   </thead>
                   <tbody>
                     {models.map((m) => {
                       const ctxTokens = ctxMap.get(m.id.trim().toLowerCase());
+                      // 池级人工覆盖展示：禁用标记 / 人工星标 / 闲时徽标（窗口字段仅命中侧下发）
+                      const qsrc = m.sources.find((s) => s.pool === 'qoder');
+                      const disabled = qsrc?.disabled === true;
+                      const inDiscount = m.rate_window != null && m.rate_base != null;
                       return (
                       <tr key={m.id} className="row-hover border-t border-slate-200/70 dark:border-zinc-800">
-                        <td className="px-3 py-2 font-mono text-xs">{m.id}</td>
-                        <td className="px-3 py-2">{m.display || '—'}</td>
+                        <td className="px-3 py-2 font-mono text-xs">
+                          {m.id}
+                          {disabled && (
+                            <sup
+                              className="ml-0.5 font-sans text-[9px] font-bold leading-none text-slate-400 dark:text-zinc-500"
+                              title="池级人工禁用：请求不再路由 Qoder 源（可在编辑弹框重新启用）"
+                            >
+                              已禁
+                            </sup>
+                          )}
+                        </td>
+                        <td className="px-3 py-2">
+                          {m.display || '—'}
+                          {m.manual && (
+                            <span
+                              className="ml-0.5 font-bold text-amber-500"
+                              title="已人工覆盖（池级覆盖层）"
+                            >
+                              *
+                            </span>
+                          )}
+                        </td>
                         <td className="px-3 py-2 text-xs text-slate-500">{m.vendor || '—'}</td>
                         <td className="px-3 py-2 text-right tabular-nums text-amber-600 dark:text-amber-400">
                           {m.rate != null ? m.rate.toFixed(2) : '—'}
+                          {inDiscount && (
+                            <span
+                              className="ml-1 rounded bg-emerald-100 px-1 py-0.5 text-[10px] font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300"
+                              title={`闲时折扣生效中（${m.rate_window}）：当前按 ${m.rate?.toFixed(2)}x 调度，窗口外为 ${m.rate_base?.toFixed(2)}x`}
+                            >
+                              闲时
+                            </span>
+                          )}
+                          {inDiscount && (
+                            <span className="ml-1 text-[10px] text-slate-400 line-through dark:text-zinc-500">
+                              {m.rate_base?.toFixed(2)}
+                            </span>
+                          )}
                         </td>
                         <td className="px-3 py-2 text-xs text-slate-500">
                           {m.efforts.length > 0 ? m.efforts.join(' / ') : '—'}
@@ -926,6 +967,15 @@ export default function QoderApiService() {
                           ) : (
                             <span className="text-slate-400 dark:text-zinc-500">✗</span>
                           )}
+                        </td>
+                        <td className="px-3 py-2 text-center">
+                          <button
+                            className="btn-ghost !p-2"
+                            title="编辑人工覆盖（展示名 / 倍率 / 时段规则 / 启用；目录同步不覆盖）"
+                            onClick={() => setMetaEditing(m)}
+                          >
+                            <Pencil size={14} />
+                          </button>
                         </td>
                       </tr>
                       );
@@ -986,6 +1036,14 @@ export default function QoderApiService() {
             })
             .catch(() => {});
         }}
+      />
+
+      {/* 池级人工覆盖编辑弹框（展示名/倍率/时段规则/启用；目录同步不覆盖人工值） */}
+      <PoolModelMetaModal
+        pool="qoder"
+        model={metaEditing}
+        onClose={() => setMetaEditing(null)}
+        onSaved={() => void refresh()}
       />
     </div>
   );

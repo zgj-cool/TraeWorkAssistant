@@ -1646,6 +1646,7 @@ pub async fn qoder_aggregate_chat(
     proto: Protocol,
     key_id: String,
     guard: InflightGuard,
+    encoded: std::collections::HashSet<String>,
 ) -> Response {
     let model_out = model.clone();
     // 聚合含分级重试（同号退避最长 60s×N），迁入 stream_runtime 专用阻塞池
@@ -2332,8 +2333,8 @@ pub async fn qoder_aggregate_chat(
                     &resp,
                     &format!("resp_{}", now_ts()),
                     &model_out,
-                    // Qoder 无 namespace 展平编码（Responses 分支为防御性兜底）
-                    &std::collections::HashSet::new(),
+                    // namespace 编码名集合随请求侧收集传入（Responses 回程还原）
+                    &encoded,
                 ),
                 Protocol::OpenAi => resp,
             };

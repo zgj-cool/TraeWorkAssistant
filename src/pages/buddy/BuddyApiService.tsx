@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { RefreshCw, Save, Coins, ToggleLeft, Activity, Gauge } from 'lucide-react';
+import { Pencil, RefreshCw, Save, Coins, ToggleLeft, Activity, Gauge } from 'lucide-react';
 import PageHeader from '../../components/PageHeader';
 import { Badge, Spinner, StatCard } from '../../components/ui';
 import { PoolHealthBadges } from '../../components/api/PoolHealthBadges';
+import PoolModelMetaModal from '../../components/api/PoolModelMetaModal';
 import { api } from '../../lib/tauri';
 import { useAppStore } from '../../store';
 import { withMinDelay } from '../../lib/delay';
@@ -11,6 +12,7 @@ import type {
   ApiPoolFile,
   PoolStatus,
   TagView,
+  UnifiedModel,
   UsageDayView,
   WbModelInfo,
   WorkBuddyAccountView,
@@ -149,6 +151,11 @@ export default function BuddyApiService() {
   // 关联（vendor = 自定义模型用户填写值优先，否则按模型名系列推断）；id 缺失/
   // 失败 → 显示 —，不影响主列表
   const [vendorMap, setVendorMap] = useState<Map<string, string>>(new Map());
+  // Buddy 源统一目录条目（键 = 小写模型 id）：池级人工覆盖生效后的倍率/窗口/
+  // 禁用/人工标记展示数据源（目录表本身为上游同步原值，覆盖值经统一目录回读）
+  const [buddyUnified, setBuddyUnified] = useState<Map<string, UnifiedModel>>(new Map());
+  // 池级人工覆盖编辑弹框（null = 关闭）
+  const [metaEditing, setMetaEditing] = useState<WbModelInfo | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -202,6 +209,14 @@ export default function BuddyApiService() {
       setWbPool(wbp);
       setWbGroups(wbg);
       setVendorMap(new Map(unified.filter((m) => m.vendor).map((m) => [m.id, m.vendor])));
+      // Buddy 源条目快照：池级人工覆盖生效后的倍率/窗口/禁用/人工标记展示源
+      setBuddyUnified(
+        new Map(
+          unified
+            .filter((m) => m.sources.some((s) => s.pool === 'buddy'))
+            .map((m) => [m.id.trim().toLowerCase(), m] as const),
+        ),
+      );
       if (pf) {
         setWbFlags({
           wbEnabled: pf.wb_enabled ?? false,
@@ -393,6 +408,13 @@ export default function BuddyApiService() {
       // 新增模型需重取统一目录关联 vendor（否则新行厂商列恒 —）
       const unified = await api.apiServer.unifiedModels();
       setVendorMap(new Map(unified.filter((m) => m.vendor).map((m) => [m.id, m.vendor])));
+      setBuddyUnified(
+        new Map(
+          unified
+            .filter((m) => m.sources.some((s) => s.pool === 'buddy'))
+            .map((m) => [m.id.trim().toLowerCase(), m] as const),
+        ),
+      );
     } catch (err) {
       pushToast('error', `Buddy 模型目录同步失败：${String(err).slice(0, 120)}`);
     } finally {
@@ -923,17 +945,61 @@ export default function BuddyApiService() {
                       <th className="px-3 py-2 text-left">思考档位</th>
                       <th className="px-3 py-2 text-right">上下文</th>
                       <th className="px-3 py-2 text-center">图片支持</th>
+                      <th className="px-3 py-2 text-center">操作</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {catalog.map((m) => (
+                    {catalog.map((m) => {
+                      // 池级人工覆盖生效值（统一目录 buddy 源侧；目录表原值为上游同步值）
+                      const um = buddyUnified.get(m.id.trim().toLowerCase());
+                      const bsrc = um?.sources.find((s) => s.pool === 'buddy');
+                      const effRate = bsrc?.rate ?? m.rate;
+                      const inDiscount = um?.rate_window != null && um?.rate_base != null;
+                      const disabled = bsrc?.disabled === true;
+                      return (
                       <tr key={m.id} className="row-hover border-t border-slate-200/70 dark:border-zinc-800">
-                        <td className="px-3 py-2 font-mono text-xs">{m.id}</td>
-                        <td className="px-3 py-2">{m.display || '—'}</td>
+                        <td className="px-3 py-2 font-mono text-xs">
+                          {m.id}
+                          {disabled && (
+                            <sup
+                              className="ml-0.5 font-sans text-[9px] font-bold leading-none text-slate-400 dark:text-zinc-500"
+                              title="池级人工禁用：请求不再路由 Buddy 源（可在编辑弹框重新启用）"
+                            >
+                              已禁
+                            </sup>
+                          )}
+                        </td>
+                        <td className="px-3 py-2">
+                          {m.display || '—'}
+                          {um?.manual && (
+                            <span
+                              className="ml-0.5 font-bold text-amber-500"
+                              title="已人工覆盖（池级覆盖层）"
+                            >
+                              *
+                            </span>
+                          )}
+                        </td>
                         <td className="px-3 py-2 text-xs text-slate-500">
                           {vendorMap.get(m.id) || '—'}
                         </td>
-                        <td className="px-3 py-2 text-right tabular-nums text-amber-600 dark:text-amber-400">{m.rate.toFixed(2)}</td>
+                        {/* 倍率：池级人工覆盖生效值优先；窗口内标注「闲时」并划除回显基准 */}
+                        <td className="px-3 py-2 text-right tabular-nums text-amber-600 dark:text-amber-400">
+                          {effRate != null ? effRate.toFixed(2) : '—'}
+                          {inDiscount && (
+                            <span
+                              className="ml-1 rounded bg-emerald-100 px-1 py-0.5 text-[10px] font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300"
+                              title={`闲时折扣生效中（${um?.rate_window}）：当前按 ${um?.rate?.toFixed(2)}x 调度，窗口外为 ${um?.rate_base?.toFixed(2)}x`}
+                            >
+                              闲时
+                            </span>
+                          )}
+                          {inDiscount && (
+                            <span className="ml-1 text-[10px] text-slate-400 line-through dark:text-zinc-500">
+                              {um?.rate_base?.toFixed(2)}
+                            </span>
+                          )}
+                        </td>
                         <td className="px-3 py-2 text-xs text-slate-500">
                           {m.effort_override
                             ? `${m.effort_override}（修正）`
@@ -951,8 +1017,18 @@ export default function BuddyApiService() {
                             <span className="text-slate-400 dark:text-zinc-500">✗</span>
                           )}
                         </td>
+                        <td className="px-3 py-2 text-center">
+                          <button
+                            className="btn-ghost !p-2"
+                            title="编辑人工覆盖（展示名 / 倍率 / 时段规则 / 启用；目录同步不覆盖）"
+                            onClick={() => setMetaEditing(m)}
+                          >
+                            <Pencil size={14} />
+                          </button>
+                        </td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -960,6 +1036,14 @@ export default function BuddyApiService() {
           </div>
         </div>
       </div>
+
+      {/* 池级人工覆盖编辑弹框（展示名/倍率/时段规则/启用；目录同步不覆盖人工值） */}
+      <PoolModelMetaModal
+        pool="buddy"
+        model={metaEditing}
+        onClose={() => setMetaEditing(null)}
+        onSaved={() => void refresh()}
+      />
     </div>
   );
 }

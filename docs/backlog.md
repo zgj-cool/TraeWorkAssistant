@@ -288,10 +288,11 @@
 - **实现路径**：**先验证再开发**——实测豆包客户端 cookie 在 DPAPI 之下还有一层客户端级二次加密（明文为二进制密文），离线拿不到明文 sessionid；sessionid 池化需先验证网页版 cookie 通道可行。E-02 指纹嗅探落库后可复用其凭证管理底座。
 - **参考开源项目**：无成熟同类（豆包客户端二次加密为独有障碍）；Chromium Cookies DPAPI 结构处理参照 CEF 公开资料。
 
-### F-41 trae2codex 转换器（P3，机会项）
+### F-41 trae2codex 转换器（P3，机会项）✅ 已完成（2026-11-24）
 
 - **需求概述**：Trae 上游为自有 `llm_utils_chat` 协议、无 Responses API，Codex CLI 不能直连；自建转换层把 Codex `/v1/responses` 请求投影到 Trae SOLO 上游——社区空白机会。
 - **实现路径**：复用网关已有 WB 侧 `/v1/responses` 投影逻辑（`wb_responses.rs` 7 单测）换上游为 SOLO `llm_utils_chat`；SSE 侧在 `sse.rs` 增加 `Protocol::Responses` 的 SOLO 分支（WB 分支已就绪可对照）；Codex CLI `config.toml` 直配。
+- **落地（2026-11-24）**：`/v1/responses` 接入统一调度器 `dispatch::resolve_target`（与 `/v1/chat/completions` 同源），Buddy/BuddyAI 沿用 WB Responses 管线，Qoder/Custom 复用各自执行器并做 Responses 投影，Trae 新增 `sse::stream_convert_responses_lines`（created/output_text.delta/function_call/completed，含 namespace 工具名还原与空完成换号重试）。修复「Codex 经 CC Switch 只进 Buddy 池、限定其他平台账号时报 503、非 Buddy 目录模型 400」三类症状。
 - **参考开源项目**：本项目 `wb_responses.rs`（投影逻辑直接复用）；`tonny0812/workbuddy2api`（`/v1/responses` 投影设计参照）；`muskke/trae-api-proxy`（Trae 上游的 Responses 兼容层 + 工具代执行范式）。
 
 ### F-42 workbuddy-mcp 模式（P3，机会项）

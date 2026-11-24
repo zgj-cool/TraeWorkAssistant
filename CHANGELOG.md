@@ -6,6 +6,20 @@
 
 ---
 
+## [Unreleased] · 2026-11-24 · /v1/responses 接入统一调度（Codex 全池可用）
+
+### 修复
+
+- **Codex（CC Switch 注册）不再只进 Buddy 池**：`/v1/responses` 改为与 `/v1/chat/completions` 同一套统一调度（Key 绑定 / per_model / priority / Smart / 前缀锁池 / 跨池回退）。此前该端点绕过调度器直接按 WB 目录判定，导致：① 请求恒落 Buddy 池；② 子 Key 只限定 Trae/Qoder 等账号时，同名模型因 Buddy 池被整体排除而 503；③ 非 Buddy 目录模型直接 400 "仅支持 WB 上游模型"。
+- **Trae / Qoder / 自定义上游补齐 Responses 协议输出**：新增 `sse::stream_convert_responses_lines`，流式输出 `response.created → output_text.delta → function_call → response.completed`，并保留 namespace 工具名还原、空完成换号重试、跨池移交；非流式统一投影为 response 对象。
+
+### 说明
+
+- Buddy / BuddyAI 仍走原有 WB Responses 专用管线（含 web_search 代执行与伪流式），行为不变；Qoder / 自定义 / Trae 现在也能作为 Codex 的后端。
+- `/v1/models` 的池前缀别名（`trae/xxx`、`qoder/xxx` 等）在 `/v1/responses` 上同样生效。
+
+---
+
 ## [3.9.6] · 2026-11-22 · 调度参数口径修正 + 折扣前积分可见 + Qoder 粘性默认开启
 
 ### 新功能

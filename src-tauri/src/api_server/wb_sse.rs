@@ -242,7 +242,7 @@ fn resp_send(tx: &Sender, event: &str, data: Value) {
 }
 
 /// 构造 Responses response 对象（created/in_progress/completed/failed 共用骨架）
-fn responses_object(id: &str, model: &str, status: &str, output: Vec<Value>, usage: Option<&Value>) -> Value {
+pub(crate) fn responses_object(id: &str, model: &str, status: &str, output: Vec<Value>, usage: Option<&Value>) -> Value {
     let mut obj = json!({
         "id": id,
         "object": "response",

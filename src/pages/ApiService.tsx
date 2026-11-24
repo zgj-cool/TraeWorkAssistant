@@ -15,6 +15,7 @@ import type {
   PoolStatus,
   TagView,
   TraeModelMeta,
+  TraeRateWindow,
   UnifiedModel,
   UsageDayView,
   GroupView,
@@ -86,6 +87,11 @@ export default function ApiService() {
   const [editing, setEditing] = useState<UnifiedModel | null>(null);
   const [fLabel, setFLabel] = useState('');
   const [fRate, setFRate] = useState('');
+  // 倍率时段规则（闲时折扣）：行级表单，start/end 为 HH:MM，rate 为窗口内倍率。
+  // 行值全部保留字符串态，保存时统一解析校验（避免受控数字输入打断小数点输入）
+  const [fWindows, setFWindows] = useState<
+    { start: string; end: string; rate: string; label: string }[]
+  >([]);
   const [fEfforts, setFEfforts] = useState<Set<string>>(new Set());
   const [fContext, setFContext] = useState('');
   const [fMaxTokens, setFMaxTokens] = useState('');
@@ -421,6 +427,7 @@ export default function ApiService() {
     // 先同步清空全部表单字段（而非等 metaGet 返回才回填）
     setFLabel('');
     setFRate('');
+    setFWindows([]);
     setFEfforts(new Set());
     setFContext('');
     setFMaxTokens('');
@@ -431,6 +438,14 @@ export default function ApiService() {
     setLoadingMeta(false);
     setFLabel(known?.label ?? '');
     setFRate(known?.rate != null ? String(known.rate) : '');
+    setFWindows(
+      (known?.rate_windows ?? []).map((w) => ({
+        start: w.start,
+        end: w.end,
+        rate: String(w.rate),
+        label: w.label ?? '',
+      })),
+    );
     setFEfforts(new Set(known?.efforts ?? []));
     setFContext(known?.context_length != null ? String(known.context_length) : '');
     setFMaxTokens(known?.max_tokens != null ? String(known.max_tokens) : '');
@@ -449,9 +464,38 @@ export default function ApiService() {
       toast('error', '数值字段格式不正确，请检查倍率 / 上下文 / max_tokens');
       return;
     }
+    // 时段规则：时刻须为合法 HH:MM、倍率须为非负有限数、起止不得相等
+    //（相等 = 零长度窗口，后端判定恒不覆盖，属无效规则，保存侧直接拦截）
+    const windows: TraeRateWindow[] = [];
+    for (const [i, w] of fWindows.entries()) {
+      const start = w.start.trim();
+      const end = w.end.trim();
+      const wr = numOrNull(w.rate);
+      const validHhmm = (s: string) => /^([01]?\d|2[0-3]):[0-5]\d$/.test(s);
+      if (!validHhmm(start) || !validHhmm(end)) {
+        toast('error', `第 ${i + 1} 条时段规则：时刻格式应为 HH:MM（如 12:00）`);
+        return;
+      }
+      if (start === end) {
+        toast('error', `第 ${i + 1} 条时段规则：起止时刻不能相同`);
+        return;
+      }
+      if (wr == null || Number.isNaN(wr)) {
+        toast('error', `第 ${i + 1} 条时段规则：窗口倍率必填且不能为负`);
+        return;
+      }
+      windows.push({
+        start,
+        end,
+        rate: wr,
+        label: w.label.trim() || null,
+      });
+    }
     const meta: TraeModelMeta = {
       label: fLabel.trim() || null,
       rate,
+      // 空列表 = 未设置（不落空数组，交由下层链兜底）
+      rate_windows: windows.length > 0 ? windows : null,
       // 未勾选任何档位 = 未设置（交由下层推断），不落空数组
       efforts: fEfforts.size > 0 ? EFFORT_OPTIONS.filter((e) => fEfforts.has(e)) : null,
       context_length: context,
@@ -1047,6 +1091,9 @@ export default function ApiService() {
                       m.sources.find((s) => s.pool === 'trae')?.disabled === true;
                     const ctxId = m.id.trim().toLowerCase();
                     const ctxOn = longCtx?.has(ctxId) === true;
+                    // 闲时折扣生效（后端仅在命中窗口时下发 rate_window + rate_base）
+                    const inDiscount =
+                      m.rate_window != null && m.rate_base != null && m.rate != null;
                     return (
                     <tr
                       key={m.id}
@@ -1086,8 +1133,23 @@ export default function ApiService() {
                       <td className="py-2 pr-3 text-xs text-slate-500 dark:text-zinc-400">
                         {m.vendor || '—'}
                       </td>
+                      {/* 倍率：窗口内显示折后价 + 闲时徽标 + 基准值对照（rate_base 仅在命中
+                          折扣窗口时下发，未命中时后端已清空，此处不用额外判断时区） */}
                       <td className="py-2 pr-3 text-right tabular-nums text-amber-600 dark:text-amber-400">
                         {m.rate != null ? m.rate.toFixed(2) : '—'}
+                        {inDiscount && (
+                          <span
+                            className="ml-1 rounded bg-emerald-100 px-1 py-0.5 text-[10px] font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300"
+                            title={`闲时折扣生效中（${m.rate_window}）：当前按 ${m.rate?.toFixed(2)}x 调度，窗口外为 ${m.rate_base?.toFixed(2)}x`}
+                          >
+                            闲时
+                          </span>
+                        )}
+                        {inDiscount && (
+                          <span className="ml-1 text-[10px] text-slate-400 line-through dark:text-zinc-500">
+                            {m.rate_base?.toFixed(2)}
+                          </span>
+                        )}
                       </td>
                       <td className="py-2 pr-3 text-xs text-slate-500 dark:text-zinc-400">
                         {m.efforts.length > 0 ? m.efforts.join(' / ') : '—'}
@@ -1210,7 +1272,12 @@ export default function ApiService() {
             />
           </div>
           <div>
-            <label className="mb-1 block text-xs text-slate-500 dark:text-zinc-400">积分倍率</label>
+            <label
+              className="mb-1 block text-xs text-slate-500 dark:text-zinc-400"
+              title="折扣窗口外的基准倍率；窗口内取值由下方「倍率时段规则」决定"
+            >
+              积分倍率（基准）
+            </label>
             <input
               className={metaInputCls}
               type="number"
@@ -1221,6 +1288,98 @@ export default function ApiService() {
               placeholder="留空 = 自动来源"
               disabled={loadingMeta}
             />
+          </div>
+          {/* 倍率时段规则（闲时折扣）：官网同步只给「同步时刻」的单一倍率，
+              同一模型闲时/非闲时价格不同，故由人工登记窗口，调度与目录共用该判定 */}
+          <div className="col-span-2">
+            <div className="mb-1 flex items-center justify-between">
+              <label className="block text-xs text-slate-500 dark:text-zinc-400">
+                倍率时段规则（闲时折扣）
+              </label>
+              <button
+                type="button"
+                className="btn-ghost !px-1.5 !py-0.5 text-[11px]"
+                disabled={loadingMeta}
+                onClick={() =>
+                  setFWindows((prev) => [...prev, { start: '12:00', end: '14:00', rate: '', label: '' }])
+                }
+              >
+                + 添加时段
+              </button>
+            </div>
+            {fWindows.length === 0 ? (
+              <p className="rounded-md border border-dashed border-slate-200 px-2 py-2 text-[11px] text-slate-400 dark:border-zinc-700 dark:text-zinc-500">
+                未配置 — 全天使用基准倍率（官网同步值 / 上方基准）
+              </p>
+            ) : (
+              <div className="space-y-1.5">
+                {fWindows.map((w, i) => (
+                  <div key={i} className="flex items-center gap-1.5">
+                    <input
+                      className={`${metaInputCls} !w-24`}
+                      type="time"
+                      value={w.start}
+                      disabled={loadingMeta}
+                      onChange={(e) =>
+                        setFWindows((prev) =>
+                          prev.map((x, j) => (j === i ? { ...x, start: e.target.value } : x)),
+                        )
+                      }
+                    />
+                    <span className="text-xs text-slate-400">–</span>
+                    <input
+                      className={`${metaInputCls} !w-24`}
+                      type="time"
+                      value={w.end}
+                      disabled={loadingMeta}
+                      onChange={(e) =>
+                        setFWindows((prev) =>
+                          prev.map((x, j) => (j === i ? { ...x, end: e.target.value } : x)),
+                        )
+                      }
+                    />
+                    <input
+                      className={`${metaInputCls} !w-20`}
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      placeholder="倍率"
+                      value={w.rate}
+                      disabled={loadingMeta}
+                      onChange={(e) =>
+                        setFWindows((prev) =>
+                          prev.map((x, j) => (j === i ? { ...x, rate: e.target.value } : x)),
+                        )
+                      }
+                    />
+                    <input
+                      className={metaInputCls}
+                      placeholder="备注（如 午间闲时）"
+                      value={w.label}
+                      disabled={loadingMeta}
+                      onChange={(e) =>
+                        setFWindows((prev) =>
+                          prev.map((x, j) => (j === i ? { ...x, label: e.target.value } : x)),
+                        )
+                      }
+                    />
+                    <button
+                      type="button"
+                      className="btn-ghost !px-1.5 !py-0.5 text-[11px] text-rose-500"
+                      disabled={loadingMeta}
+                      title="删除该时段"
+                      onClick={() => setFWindows((prev) => prev.filter((_, j) => j !== i))}
+                    >
+                      删除
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <p className="mt-1 text-[11px] leading-4 text-slate-400 dark:text-zinc-500">
+              命中窗口按窗口倍率计费与调度，未命中回落基准倍率；结束早于开始表示跨午夜（如
+              22:00–08:00）。时段生效中时目录倍率列会标注「闲时」并回显基准值。
+            </p>
           </div>
           <div className="col-span-2">
             <label className="mb-1 block text-xs text-slate-500 dark:text-zinc-400">

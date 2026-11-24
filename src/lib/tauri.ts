@@ -1145,6 +1145,14 @@ export const api = {
       invoke<void>('trae_model_meta_set', { model, meta }),
     // 清除人工覆盖（恢复自动来源链）；返回是否确有删除
     metaClear: (model: string) => invoke<boolean>('trae_model_meta_clear', { model }),
+    // Buddy/Qoder 模型目录池级人工覆盖（kv pool_model_meta，键 pool|canonical）：
+    // 目录同步只写各自目录键、不覆盖人工值；生效字段 = label/rate(+时段规则)/enabled
+    poolMetaGet: (pool: 'buddy' | 'qoder', model: string) =>
+      invoke<TraeModelMeta | null>('pool_model_meta_get', { pool, model }),
+    poolMetaSet: (pool: 'buddy' | 'qoder', model: string, meta: TraeModelMeta) =>
+      invoke<void>('pool_model_meta_set', { pool, model, meta }),
+    poolMetaClear: (pool: 'buddy' | 'qoder', model: string) =>
+      invoke<boolean>('pool_model_meta_clear', { pool, model }),
     // Trae 长上下文开关（kv trae_long_context，仅 Trae 池；勾选即对下一请求生效）
     traeLongContextList: () => invoke<TraeLongContextView>('trae_long_context_list'),
     // 返回生效状态；模型不支持长上下文时开启被拒绝

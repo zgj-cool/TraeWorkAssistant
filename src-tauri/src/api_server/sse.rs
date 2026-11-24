@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Read};
 use std::time::Duration;
 
@@ -1466,6 +1467,335 @@ fn stream_convert_anthropic_src(
     )
 }
 
+/// 流式转换：SOLO SSE → Responses SSE（/v1/responses，Codex 协议）
+///
+/// 与 wb_sse::stream_forward_ex 的 Responses 分支同构：created → item.added
+/// → output_text.delta… → item.done → completed；工具调用在完成时统一输出
+/// （含 namespace 编码名还原）。零内容完成以 EMPTY 哨兵上抛，交调用方换号重试。
+#[allow(unused_assignments)]
+pub fn stream_convert_responses_lines(
+    mut src: InterruptibleLines,
+    sender: tokio::sync::mpsc::Sender<Result<bytes::Bytes, std::io::Error>>,
+    response_id: &str,
+    model: &str,
+    encoded: &HashSet<String>,
+    tool_alias: Option<&ToolAliasReverse>,
+) -> (Option<(i64, String)>, bool, Option<Value>) {
+    let mut st = SseState::new();
+    let mut created = false;
+    let mut message_open = false;
+    let mut message_index: i64 = -1;
+    let mut next_index: i64 = 0;
+    let mut text = String::new();
+    let mut tools: Vec<ToolBuf> = Vec::new();
+    let mut usage: Option<Value> = None;
+    let mut finish = String::new();
+    let mut saw_done = false;
+    let mut has_content = false;
+    let mut error_info: Option<(i64, String)> = None;
+    let mut sent_any = false;
+    let mut disconnected = false;
+
+    macro_rules! send_event {
+        ($event:expr, $data:expr) => {{
+            let frame = format!("event: {}\ndata: {}\n\n", $event, $data);
+            if sender.blocking_send(Ok(bytes::Bytes::from(frame))).is_err() {
+                disconnected = true;
+            }
+        }};
+    }
+
+    macro_rules! ensure_created {
+        () => {
+            if !created {
+                created = true;
+                let resp = super::wb_sse::responses_object(
+                    response_id, model, "in_progress", vec![], None,
+                );
+                send_event!("response.created", json!({
+                    "type": "response.created",
+                    "response": resp,
+                }));
+                sent_any = true;
+            }
+        };
+    }
+
+    macro_rules! finish_stream {
+        () => {{
+            ensure_created!();
+            let mut output: Vec<Value> = Vec::new();
+            if message_open {
+                let item = json!({
+                    "id": format!("{}_msg_0", response_id),
+                    "type": "message",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": text, "annotations": []}],
+                });
+                send_event!("response.output_item.done", json!({
+                    "type": "response.output_item.done",
+                    "output_index": message_index,
+                    "item": item,
+                }));
+                output.push(item);
+            }
+            for tool in tools.iter() {
+                let idx = next_index;
+                next_index += 1;
+                let item_id = if tool.id.is_empty() {
+                    format!("{}_fc_{}", response_id, idx)
+                } else {
+                    tool.id.clone()
+                };
+                let call_id = if tool.id.is_empty() {
+                    format!("call_{}_{}", response_id, idx)
+                } else {
+                    tool.id.clone()
+                };
+                let mut item = json!({
+                    "id": item_id,
+                    "type": "function_call",
+                    "status": "completed",
+                    "call_id": call_id,
+                    "arguments": tool.args,
+                });
+                // 编码名还原为 Codex 只接受的 {name, namespace} 双字段；仅对
+                // 请求侧登记的编码名拆分（与 wb_sse Responses 分支同口径）
+                if encoded.contains(tool.name.as_str()) {
+                    match super::wb_responses::split_namespaced(&tool.name) {
+                        Some((ns, inner)) => {
+                            item["name"] = json!(inner);
+                            item["namespace"] = json!(ns);
+                        }
+                        None => item["name"] = json!(tool.name),
+                    }
+                } else {
+                    item["name"] = json!(tool.name);
+                }
+                let mut added = item.clone();
+                added["status"] = json!("in_progress");
+                added["arguments"] = json!("");
+                send_event!("response.output_item.added", json!({
+                    "type": "response.output_item.added",
+                    "output_index": idx,
+                    "item": added,
+                }));
+                if !tool.args.is_empty() {
+                    send_event!("response.function_call_arguments.delta", json!({
+                        "type": "response.function_call_arguments.delta",
+                        "item_id": item["id"],
+                        "output_index": idx,
+                        "delta": tool.args,
+                    }));
+                }
+                send_event!("response.output_item.done", json!({
+                    "type": "response.output_item.done",
+                    "output_index": idx,
+                    "item": item,
+                }));
+                output.push(item);
+            }
+            let mut resp = super::wb_sse::responses_object(
+                response_id, model, "completed", output, usage.as_ref(),
+            );
+            if finish == "length" {
+                resp["status"] = json!("incomplete");
+                resp["incomplete_details"] = json!({"reason": "max_output_tokens"});
+            }
+            send_event!("response.completed", json!({
+                "type": "response.completed",
+                "response": resp,
+            }));
+            sent_any = true;
+        }};
+    }
+
+    loop {
+        if disconnected {
+            break;
+        }
+        let line = match src.next_timeout(LINE_POLL) {
+            Ok(Some(line)) => line,
+            Ok(None) => break,
+            Err(()) => {
+                if sender.is_closed() {
+                    break;
+                }
+                continue;
+            }
+        };
+        if let Some(ev) = scan_line(&mut st, &line.trim_end()) {
+            match ev.event.as_str() {
+                "output" | "thought" => {
+                    if saw_done {
+                        continue;
+                    }
+                    if !ev.response.is_empty() {
+                        ensure_created!();
+                        if !message_open {
+                            message_open = true;
+                            message_index = next_index;
+                            next_index += 1;
+                            send_event!("response.output_item.added", json!({
+                                "type": "response.output_item.added",
+                                "output_index": message_index,
+                                "item": {
+                                    "id": format!("{}_msg_0", response_id),
+                                    "type": "message",
+                                    "status": "in_progress",
+                                    "role": "assistant",
+                                    "content": [],
+                                },
+                            }));
+                        }
+                        text.push_str(&ev.response);
+                        has_content = true;
+                        send_event!("response.output_text.delta", json!({
+                            "type": "response.output_text.delta",
+                            "item_id": format!("{}_msg_0", response_id),
+                            "output_index": message_index,
+                            "content_index": 0,
+                            "delta": ev.response,
+                        }));
+                        sent_any = true;
+                    }
+                    if let Some(tcs) = ev.tool_calls.as_ref().and_then(|v| v.as_array()) {
+                        for (pos, call) in tcs.iter().enumerate() {
+                            let mut c = call.clone();
+                            if let Some(fc) = c.get("function_call").cloned() {
+                                if let Some(obj) = c.as_object_mut() {
+                                    obj.insert("function".into(), fc);
+                                    obj.remove("function_call");
+                                }
+                            }
+                            let Some(fn_obj) = c
+                                .get("function")
+                                .and_then(|f| f.as_object())
+                                .cloned()
+                            else {
+                                continue;
+                            };
+                            let mut name = fn_obj
+                                .get("name")
+                                .and_then(|n| n.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            rename_tool_back(tool_alias, &mut name);
+                            let args = fn_obj
+                                .get("arguments")
+                                .and_then(|a| a.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let id = c
+                                .get("id")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let idx = c
+                                .get("index")
+                                .and_then(|v| v.as_u64())
+                                .map(|v| v as usize)
+                                .unwrap_or(pos);
+                            if let Some(existing) = tools.iter_mut().find(|t| t.slot == idx) {
+                                if existing.name.is_empty() {
+                                    existing.name = name;
+                                }
+                                if existing.id.is_empty() {
+                                    existing.id = id;
+                                }
+                                existing.args.push_str(&args);
+                            } else {
+                                tools.push(ToolBuf { id, name, args, slot: idx });
+                            }
+                            has_content = true;
+                        }
+                    }
+                }
+                "token_usage" => {
+                    usage = Some(normalize_openai_usage(&ev.usage.unwrap_or(json!({}))));
+                }
+                "done" | "turn_completion" => {
+                    if saw_done {
+                        continue;
+                    }
+                    if !ev.finish_reason.is_empty() {
+                        finish = ev.finish_reason;
+                    }
+                    if !has_content {
+                        error_info = Some((
+                            crate::api_server::EMPTY_COMPLETION_CODE,
+                            super::EMPTY_COMPLETION_MSG.to_string(),
+                        ));
+                        break;
+                    }
+                    if finish.is_empty() {
+                        finish = "stop".to_string();
+                    }
+                    finish_stream!();
+                    saw_done = true;
+                    sent_any = true;
+                    break;
+                }
+                "error" => {
+                    if saw_done {
+                        continue;
+                    }
+                    if sent_any {
+                        let msg = stream_msg_or_fallback(
+                            &ev.error_message,
+                            ev.error_code.unwrap_or(0),
+                        );
+                        let mut resp = super::wb_sse::responses_object(
+                            response_id, model, "failed", vec![], None,
+                        );
+                        resp["error"] = json!({
+                            "code": ev.error_code.unwrap_or(0).to_string(),
+                            "message": msg,
+                        });
+                        send_event!("response.failed", json!({
+                            "type": "response.failed",
+                            "response": resp,
+                        }));
+                        sent_any = true;
+                    } else {
+                        error_info = Some((ev.error_code.unwrap_or(0), ev.error_message));
+                    }
+                    break;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let read_cut = src
+        .take_read_error()
+        .filter(|e| super::is_transport_cut_text(&e.to_string()));
+    if !saw_done && error_info.is_none() {
+        if has_content {
+            finish_stream!();
+            if let Some(e) = read_cut {
+                error_info = Some((
+                    super::TRANSPORT_CUT_CODE,
+                    format!("{}{}", super::TRANSPORT_CUT_MSG_PREFIX, e),
+                ));
+            }
+        } else if let Some(e) = read_cut {
+            error_info = Some((
+                super::TRANSPORT_CUT_CODE,
+                format!("{}{}", super::TRANSPORT_CUT_MSG_PREFIX, e),
+            ));
+        } else {
+            error_info = Some((
+                crate::api_server::EMPTY_COMPLETION_CODE,
+                super::EMPTY_COMPLETION_MSG.to_string(),
+            ));
+        }
+    }
+
+    (error_info, sent_any, usage)
+}
+
 /// 非流式聚合：SOLO SSE → Anthropic message 对象（/v1/messages）
 pub fn aggregate_anthropic<R: Read + Send>(
     reader: R,
@@ -1710,6 +2040,73 @@ mod tests {
         }
         res.push_str(rest);
         res
+    }
+
+    // ==================== Responses 投影（SOLO 池 /v1/responses） ====================
+
+    fn solo_lines(input: &str) -> InterruptibleLines {
+        let owned = input.to_string();
+        InterruptibleLines::from_iterator(Box::new(
+            owned.lines().map(str::to_string).collect::<Vec<_>>().into_iter(),
+        ))
+    }
+
+    #[test]
+    fn responses_stream_projects_text_and_completed() {
+        let (tx, rx) = tokio::sync::mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(64);
+        let input = "event: output\ndata: {\"response\":\"he\"}\n\n\
+                     event: output\ndata: {\"response\":\"llo\"}\n\n\
+                     event: token_usage\ndata: {\"prompt_tokens\":3,\"completion_tokens\":2}\n\n\
+                     event: done\ndata: {\"finish_reason\":\"stop\"}\n\n";
+        let (err, sent_any, usage) = stream_convert_responses_lines(
+            solo_lines(input), tx, "resp_1", "glm-5.3", &HashSet::new(), None,
+        );
+        assert!(err.is_none(), "{err:?}");
+        assert!(sent_any);
+        assert!(usage.is_some());
+        let events = collect_events(rx);
+        let joined = events.join("\n");
+        assert!(joined.contains("event: response.created"), "{joined}");
+        assert!(joined.contains("event: response.output_item.added"), "{joined}");
+        assert!(joined.contains("event: response.output_text.delta"), "{joined}");
+        assert!(joined.contains("\"delta\":\"he\""), "{joined}");
+        assert!(joined.contains("event: response.output_item.done"), "{joined}");
+        assert!(joined.contains("event: response.completed"), "{joined}");
+        assert!(joined.contains("\"input_tokens\":3"), "{joined}");
+        assert!(joined.contains("\"output_tokens\":2"), "{joined}");
+        assert!(!joined.contains("[DONE]"), "Responses 流不应出现 [DONE]");
+    }
+
+    #[test]
+    fn responses_stream_restores_namespaced_tool_and_alias() {
+        let (tx, rx) = tokio::sync::mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(64);
+        let mut encoded = HashSet::new();
+        encoded.insert("multi_agent_v1__spawn_agent".to_string());
+        let input = "event: output\ndata: {\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"multi_agent_v1__spawn_agent\",\"arguments\":\"{\\\"a\\\":1}\"}}]}\n\n\
+                     event: done\ndata: {\"finish_reason\":\"tool_calls\"}\n\n";
+        let (err, sent_any, _) = stream_convert_responses_lines(
+            solo_lines(input), tx, "resp_2", "glm-5.3", &encoded, None,
+        );
+        assert!(err.is_none(), "{err:?}");
+        assert!(sent_any);
+        let joined = collect_events(rx).join("\n");
+        assert!(joined.contains("event: response.output_item.added"), "{joined}");
+        assert!(joined.contains("\"namespace\":\"multi_agent_v1\""), "{joined}");
+        assert!(joined.contains("\"name\":\"spawn_agent\""), "{joined}");
+        assert!(joined.contains("event: response.completed"), "{joined}");
+    }
+
+    #[test]
+    fn responses_stream_empty_completion_is_sentinel() {
+        let (tx, rx) = tokio::sync::mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(64);
+        let input = "event: done\ndata: {}\n\n";
+        let (err, sent_any, _) = stream_convert_responses_lines(
+            solo_lines(input), tx, "resp_3", "m", &HashSet::new(), None,
+        );
+        let (code, _) = err.expect("空完成必须上抛哨兵供换号重试");
+        assert_eq!(code, crate::api_server::EMPTY_COMPLETION_CODE);
+        assert!(!sent_any);
+        assert!(collect_events(rx).is_empty(), "空完成不得下发任何帧");
     }
 
     // ==================== P2 修复8：Anthropic 流内错误收口 ====================

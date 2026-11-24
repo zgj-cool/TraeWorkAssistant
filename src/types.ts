@@ -729,8 +729,12 @@ export interface UnifiedModel {
   vendor: string;
   /** 地区归属（Qoder 双区特有 cn|global；非 Qoder 源缺省，展示 —） */
   region?: string | null;
-  /** 实际生效倍率 = 当前调度策略命中的来源侧 */
+  /** 实际生效倍率 = 当前调度策略命中的来源侧（闲时窗口内为折后倍率） */
   rate: number | null;
+  /** 基准倍率（折扣窗口外的值）：仅当当前处于闲时窗口时下发，供展示对照 */
+  rate_base?: number | null;
+  /** 当前命中的倍率时段标签（如「午间闲时」/「12:00–14:00」）；缺省 = 不在窗口内 */
+  rate_window?: string | null;
   /** 思考档位（双语义合并展示，仅 Buddy 池作为请求参数下发） */
   efforts: string[];
   /** Max Mode 支持（Trae 池 1M 上下文；Buddy/自定义单源恒 false） */
@@ -814,13 +818,30 @@ export interface CustomModel {
  *  嵌套字段保持 snake_case；null = 未设置，交由下层自动来源兜底（官网同步 > 内置参考 > 名称推断） */
 export interface TraeModelMeta {
   label?: string | null;
+  /** 基准倍率（折扣窗口外）；窗口内取值见 rate_windows */
   rate?: number | null;
+  /** 倍率时段规则（闲时折扣）：命中窗口用其倍率，未命中回落 rate / 官网同步值 */
+  rate_windows?: TraeRateWindow[] | null;
   efforts?: string[] | null;
   context_length?: number | null;
   max_tokens?: number | null;
   supports_image?: boolean | null;
   /** 渠道内单模型开关（issue #145）：null = 默认启用；false = 禁用该模型（不路由 Trae 源） */
   enabled?: boolean | null;
+}
+
+/** 倍率时段规则（闲时折扣，L1 人工维护）：对应 TraeRateWindow */
+export interface TraeRateWindow {
+  /** 起始时刻 HH:MM（含） */
+  start: string;
+  /** 结束时刻 HH:MM（不含）；end <= start 视为跨午夜（如 22:00–08:00） */
+  end: string;
+  /** 窗口内生效倍率（0 = 免费） */
+  rate: number;
+  /** 备注（如「午间闲时」）；空则展示时段字面量 */
+  label?: string | null;
+  /** 生效星期（0=周日…6=周六）；空 = 每天生效 */
+  days?: number[];
 }
 
 /** Trae 长上下文开关（kv trae_long_context；trae_long_context_list）。仅 Trae 池生效，

@@ -307,6 +307,7 @@ pub fn custom_stream_chat(
     proto: Protocol,
     key_id: String,
     guard: InflightGuard,
+    encoded: std::collections::HashSet<String>,
 ) -> Response {
     let (tx, rx) = tokio::sync::mpsc::channel(64);
 
@@ -440,12 +441,12 @@ pub fn custom_stream_chat(
                     }
                     Ok(lines) => {
                         // 可中断行源：stream_forward_ex 停滞期间周期性检查客户端断连。
-                        // 自定义上游无 namespace 展平编码 → 空集合禁用编码名拆分（审查 F4）
+                        // namespace 编码名集合随请求侧收集传入（Responses 回程还原）
                         // B1：迁 stream_forward_ex 四元组——failed_inline = 流内失败
                         // （response.failed / error 帧）已就地透传客户端，此时 error_info
                         // 恒 None，旧三元组仅凭 is_none() 会把流内失败误判成功
                         let (error_info, sent_any, failed_inline, up_usage) = wb_sse::stream_forward_ex(
-                            lines, &tx, proto, &chat_id, &model, &std::collections::HashSet::new(), None,
+                            lines, &tx, proto, &chat_id, &model, &encoded, None,
                         );
                         let duration_ms = start_ts.elapsed().as_millis() as u64;
                         // 记账成功口径（对齐 wb_route）：无流内错误且未流内失败
@@ -566,6 +567,7 @@ pub async fn custom_aggregate_chat(
     proto: Protocol,
     key_id: String,
     guard: InflightGuard,
+    encoded: std::collections::HashSet<String>,
 ) -> Response {
     // 闭包 move 后外层协议转换仍需模型名，提前克隆
     let model_outer = model.clone();
@@ -760,8 +762,8 @@ pub async fn custom_aggregate_chat(
                     &resp,
                     &format!("resp_{}", now_ts()),
                     &model_outer,
-                    // 自定义上游无 namespace 展平编码（Responses 分支为防御性兜底）
-                    &std::collections::HashSet::new(),
+                    // namespace 编码名集合随请求侧收集传入（Responses 回程还原）
+                    &encoded,
                 ),
                 Protocol::OpenAi => resp,
             };
@@ -864,6 +866,70 @@ mod tests {
         }
     }
 
+    /// E2E：/v1/responses 经统一调度命中 custom 池，输出 Responses 对象
+    /// （回归「Codex 只进 Buddy 池 / 非 Buddy 模型 400」）
+    #[tokio::test]
+    async fn responses_endpoint_routes_to_custom_pool() {
+        let dir = std::env::temp_dir().join(format!(
+            "twa_responses_custom_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for conn in listener.incoming() {
+                let Ok(mut s) = conn else { break };
+                let mut req: Vec<u8> = Vec::new();
+                let mut chunk = [0u8; 4096];
+                while !read_request_complete(&req) {
+                    match s.read(&mut chunk) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => req.extend_from_slice(&chunk[..n]),
+                    }
+                }
+                let resp: &[u8] = b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n\
+                      data: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":null}]}\n\n\
+                      data: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":2,\"completion_tokens\":1}}\n\n\
+                      data: [DONE]\n\n";
+                let _ = s.write_all(resp);
+                let _ = s.flush();
+            }
+        });
+        let cm = CustomModel {
+            id: "cm-resp00000001".into(),
+            name: "mock-model".into(),
+            base_url: format!("http://127.0.0.1:{port}/v1"),
+            api_key: String::new(),
+            enabled: true,
+            ..Default::default()
+        };
+        custom_models::upsert(&dir, cm).unwrap();
+        let state = std::sync::Arc::new(super::super::test_shared_state(dir.clone()));
+        let resp = crate::api_server::routes::responses_api(
+            axum::extract::State(state),
+            None,
+            axum::body::Bytes::from(
+                br#"{"model":"mock-model","input":"hi","stream":false}"#.to_vec(),
+            ),
+        )
+        .await;
+        let status = resp.status();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+        assert_eq!(status, StatusCode::OK, "body={}", String::from_utf8_lossy(&bytes));
+        assert_eq!(v["object"], serde_json::json!("response"));
+        assert_eq!(
+            v.pointer("/output/0/content/0/text"),
+            Some(&serde_json::json!("ok")),
+            "{v}"
+        );
+    }
+
     /// 端到端轮换（§5.3 验收「一条 401 时请求自动落到另一条且客户端无感」）：
     /// 组 = [401 上游, 200 上游] → 客户端收到 200 与内容 "ok"；401 条目落 Auth 长窗；
     /// 200 条目熔断被清除且记会话粘上游
@@ -885,6 +951,7 @@ mod tests {
             Protocol::OpenAi,
             "kid".into(),
             state.inflight_guard(),
+            std::collections::HashSet::new(),
         )
         .await;
 
