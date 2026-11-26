@@ -266,6 +266,24 @@ pub fn effective_rate_now(
     effective_rate_at(meta, base, now.weekday().num_days_from_sunday(), minutes)
 }
 
+/// 调度侧「Trae 当前生效倍率」（smart 排序键数据源）：与目录展示同一条链——
+/// 基准 = L1 rate → L2 官网 rate → L3 文档参考，当前时刻命中 `rate_windows`
+/// 则取折后值。封装于此而非 dispatch 自拼链，保证「展示的倍率」与
+/// 「调度依据」不漂移（此前 dispatch 只取 L2、忽略 L1 人工基准 rate）。
+pub fn trae_effective_rate_now(data_dir: &Path, canonical: &str) -> Option<f64> {
+    let meta = load_meta(data_dir);
+    let l1 = meta.get(canonical);
+    let l2 = models_sync::load_models(data_dir)
+        .iter()
+        .find(|m| canonical_id(&m.id) == canonical)
+        .and_then(|m| m.rate);
+    let base = l1
+        .and_then(|l| l.rate)
+        .or(l2)
+        .or_else(|| doc_rate(canonical));
+    effective_rate_now(l1, base).0
+}
+
 // ==================== L1 人工维护覆盖层（trae_model_meta.json，§6.1） ====================
 
 /// L1 覆盖层条目（编辑弹框落盘；None = 该字段未人工指定，交由下层兜底）
@@ -476,6 +494,14 @@ pub struct UnifiedSource {
     pub rate: Option<f64>,
     pub enabled: bool,
     pub disabled: bool,
+    /// 该源自身的闲时基准倍率（仅该源命中折扣窗口时下发）。
+    /// 与顶层 `UnifiedModel.rate_base`（调度命中侧口径）区分：池级页面（Trae/Buddy/
+    /// Qoder）展示本池源倍率，必须读本字段，否则多源同名时会串用命中侧池的窗口
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rate_base: Option<f64>,
+    /// 该源自身的折扣窗口标签（仅该源命中窗口时下发），同 `rate_base` 用途
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rate_window: Option<String>,
 }
 
 /// 自定义模型上游组的目录聚合中间态（P1：同 canonical 多条合并为单行）——
@@ -632,6 +658,8 @@ pub fn unified_models_ex(
     buddy_ai: Option<(bool, bool)>,
     qoder_flash_free: bool,
 ) -> Vec<UnifiedModel> {
+    // 注：模型同义组（model_alias）不参与目录聚合——同义组只是请求入口的前置判断，
+    // 配置后 /v1/models 与管理端目录的条目、归并键与配置前完全一致（零影响）
     let l1 = load_meta(data_dir);
     // 池级人工覆盖层（buddy/qoder 源，kv pool_model_meta）：倍率(+时段)/展示名/单模型开关
     let pool_meta = load_pool_meta(data_dir);
@@ -713,6 +741,9 @@ pub fn unified_models_ex(
                     enabled: enabled_of(TargetPool::Trae),
                     // issue #145：L1 meta.enabled=false → 源级静态禁用
                     disabled: t_meta.and_then(|l| l.enabled).map_or(false, |e| !e),
+                    // 源级窗口字段：池级页面按本池源判断「闲时」
+                    rate_base: if t.rate_window.is_some() { t.rate_base } else { None },
+                    rate_window: t.rate_window.clone(),
                 }],
                 manual: l1.contains_key(&canonical),
             },
@@ -749,6 +780,9 @@ pub fn unified_models_ex(
                     rate: brate,
                     enabled: enabled_of(TargetPool::Buddy),
                     disabled: b_disabled,
+                    // 源级窗口字段（仅本池命中窗口时下发）
+                    rate_base: bwin.as_ref().map(|_| bbase).flatten(),
+                    rate_window: bwin.as_ref().cloned(),
                 });
                 // display / supports_image 保留 Trae 侧现值，候选记入 buddy_disp/img，
                 // 由末段按策略命中侧选定（L1 label 绝对优先，§3.2）；
@@ -782,6 +816,9 @@ pub fn unified_models_ex(
             }
             None => {
                 order.push(canonical.clone());
+                // 顶层与源级窗口字段共用：先取一份源级快照，避免顶层 move 后不可用
+                let b_src_base = bwin.as_ref().map(|_| bbase).flatten();
+                let b_src_win = bwin.clone();
                 acc.insert(
                     canonical.clone(),
                     UnifiedModel {
@@ -809,6 +846,8 @@ pub fn unified_models_ex(
                             rate: brate,
                             enabled: enabled_of(TargetPool::Buddy),
                             disabled: b_disabled,
+                            rate_base: b_src_base,
+                            rate_window: b_src_win,
                         }],
                         manual: false,
                     },
@@ -856,6 +895,8 @@ pub fn unified_models_ex(
                         rate: None,
                         enabled: bai_enabled,
                         disabled: false,
+                        rate_base: None,
+                        rate_window: None,
                     });
                 }
                 None => {
@@ -887,6 +928,8 @@ pub fn unified_models_ex(
                                 rate: rate_of(&m),
                                 enabled: bai_enabled,
                                 disabled: false,
+                                rate_base: None,
+                                rate_window: None,
                             }],
                             manual: false,
                         },
@@ -960,6 +1003,8 @@ pub fn unified_models_ex(
                     rate: crate_rate,
                     enabled: g.enabled,
                     disabled: false,
+                    rate_base: None,
+                    rate_window: None,
                 });
                 if g.enabled {
                     if let Some(r) = crate_rate {
@@ -999,6 +1044,8 @@ pub fn unified_models_ex(
                             rate: crate_rate,
                             enabled: g.enabled,
                             disabled: false,
+                            rate_base: None,
+                            rate_window: None,
                         }],
                         manual: false,
                     },
@@ -1080,6 +1127,9 @@ pub fn unified_models_ex(
                         rate: qrate_eff,
                         enabled: enabled_of(TargetPool::Qoder),
                         disabled: q_disabled,
+                        // 源级窗口字段（仅 Qoder 侧命中窗口时下发）
+                        rate_base: qwin.as_ref().map(|_| qrate).flatten(),
+                        rate_window: qwin.as_ref().cloned(),
                     });
                     if let Some(r) = qrate_eff {
                         u.rate = Some(r);
@@ -1112,6 +1162,9 @@ pub fn unified_models_ex(
                         .and_then(Value::as_str)
                         .filter(|s| !s.is_empty())
                         .unwrap_or("Qoder");
+                    // 顶层与源级窗口字段共用：先取一份源级快照，避免顶层 move 后不可用
+                    let q_src_base = qwin.as_ref().map(|_| qrate).flatten();
+                    let q_src_win = qwin.clone();
                     acc.insert(
                         canonical.clone(),
                         UnifiedModel {
@@ -1133,6 +1186,8 @@ pub fn unified_models_ex(
                                 rate: qrate_eff,
                                 enabled: enabled_of(TargetPool::Qoder),
                                 disabled: q_disabled,
+                                rate_base: q_src_base,
+                                rate_window: q_src_win,
                             }],
                             manual: false,
                         },
@@ -2279,5 +2334,82 @@ mod tests {
         assert!(load_pool_meta(&f.dir).is_empty());
         // 非法池拒绝
         assert!(pool_meta_set(&f.dir, "trae", "x", TraeModelMeta::default()).is_err());
+    }
+
+    /// 模型同义组（model_alias）不影响目录：配置前后条目与归并键完全一致
+    /// （同义组只是请求入口的前置判断）
+    #[test]
+    fn t_alias_group_does_not_change_catalog() {
+        let f = fixture(
+            &[("DeepSeek-V4-Pro-Official", Some(0.72))],
+            &["deepseek-v4-pro"],
+            None,
+        );
+        let before: Vec<String> = unified_models(&f.dir, true, true, true)
+            .into_iter()
+            .map(|m| canonical_id(&m.id))
+            .collect();
+        // 对外 id 与 Buddy/Qoder 自身模型同名，且把两边都列入成员
+        crate::store::db(&f.dir)
+            .kv_set(
+                "model_alias",
+                &json!({"groups": [{
+                    "id": "deepseek-v4-pro",
+                    "members": [
+                        {"pool": "trae", "model": "DeepSeek-V4-Pro-Official"},
+                        {"pool": "buddy", "model": "deepseek-v4-pro"},
+                        {"pool": "qoder", "model": "deepseek-v4-pro"}
+                    ],
+                    "enabled": true
+                }]}),
+            )
+            .unwrap();
+        super::super::config_cache::invalidate(&f.dir, "model_alias");
+        let after_list = unified_models(&f.dir, true, true, true);
+        let after: Vec<String> = after_list.iter().map(|m| canonical_id(&m.id)).collect();
+        assert_eq!(before, after, "配置同义组不得增减/改写任何目录条目");
+        // 两边的真实条目各自保留（Trae 官方名与 Buddy 自身名不互相吞掉）
+        assert_eq!(find(&after_list, "DeepSeek-V4-Pro-Official").id, "DeepSeek-V4-Pro-Official");
+        assert_eq!(find(&after_list, "deepseek-v4-pro").id, "deepseek-v4-pro");
+    }
+
+    /// 源级闲时窗口隔离：Trae 配了窗口，Buddy 页不得因此显示「闲时」
+    /// （顶层 rate_window 是调度命中侧口径，池级页面必须读 `sources[].rate_window`）
+    #[test]
+    fn t_source_rate_window_is_per_pool() {
+        let f = fixture(
+            &[("glm-5.3", Some(0.72))],
+            &["glm-5.3"],
+            Some(json!({
+                "glm-5.3": {
+                    "rate": 0.72,
+                    "rate_windows": [{"start": "00:00", "end": "23:59", "rate": 0.36}]
+                }
+            })),
+        );
+        super::super::config_cache::invalidate(&f.dir, "trae_model_meta");
+        let list = unified_models(&f.dir, true, true, true);
+        let u = find(&list, "glm-5.3");
+        let trae = u.sources.iter().find(|s| s.pool == "trae").unwrap();
+        let buddy = u.sources.iter().find(|s| s.pool == "buddy").unwrap();
+        // Trae 源自身命中窗口（折后 0.36、基准 0.72）
+        assert_eq!(trae.rate, Some(0.36));
+        assert_eq!(trae.rate_base, Some(0.72));
+        assert!(trae.rate_window.is_some(), "Trae 源应标记窗口");
+        // Buddy 源自身无窗口声明 → 不得透出窗口字段（池级页面不显示「闲时」）
+        assert_eq!(buddy.rate_window, None);
+        assert_eq!(buddy.rate_base, None);
+        // 默认命中侧为 Buddy → 顶层（客户端口径）也不带窗口
+        assert_eq!(u.rate_window, None);
+        // 命中侧改为 Trae → 顶层窗口随命中侧下发
+        let mut p = super::super::dispatch::load_policy(&f.dir);
+        p.priority = vec!["trae".into(), "buddy".into()];
+        super::super::dispatch::save_policy(&f.dir, &p).unwrap();
+        super::super::config_cache::invalidate(&f.dir, "dispatch_policy");
+        let list = unified_models(&f.dir, true, true, true);
+        let u = find(&list, "glm-5.3");
+        assert!(u.rate_window.is_some(), "命中侧为 Trae 时顶层应下发窗口");
+        let buddy = u.sources.iter().find(|s| s.pool == "buddy").unwrap();
+        assert_eq!(buddy.rate_window, None, "Buddy 源仍无窗口");
     }
 }

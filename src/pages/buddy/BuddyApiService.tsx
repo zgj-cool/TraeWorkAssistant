@@ -954,7 +954,8 @@ export default function BuddyApiService() {
                       const um = buddyUnified.get(m.id.trim().toLowerCase());
                       const bsrc = um?.sources.find((s) => s.pool === 'buddy');
                       const effRate = bsrc?.rate ?? m.rate;
-                      const inDiscount = um?.rate_window != null && um?.rate_base != null;
+                      // 闲时折扣只看 Buddy 源自身（顶层字段是调度命中侧口径，多源同名时会串池）
+                      const inDiscount = bsrc?.rate_window != null && bsrc?.rate_base != null;
                       const disabled = bsrc?.disabled === true;
                       return (
                       <tr key={m.id} className="row-hover border-t border-slate-200/70 dark:border-zinc-800">
@@ -989,14 +990,14 @@ export default function BuddyApiService() {
                           {inDiscount && (
                             <span
                               className="ml-1 rounded bg-emerald-100 px-1 py-0.5 text-[10px] font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300"
-                              title={`闲时折扣生效中（${um?.rate_window}）：当前按 ${um?.rate?.toFixed(2)}x 调度，窗口外为 ${um?.rate_base?.toFixed(2)}x`}
+                              title={`闲时折扣生效中（${bsrc?.rate_window}）：当前按 ${effRate?.toFixed(2)}x 调度，窗口外为 ${bsrc?.rate_base?.toFixed(2)}x`}
                             >
                               闲时
                             </span>
                           )}
                           {inDiscount && (
                             <span className="ml-1 text-[10px] text-slate-400 line-through dark:text-zinc-500">
-                              {um?.rate_base?.toFixed(2)}
+                              {bsrc?.rate_base?.toFixed(2)}
                             </span>
                           )}
                         </td>

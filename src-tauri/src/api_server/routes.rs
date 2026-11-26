@@ -724,6 +724,16 @@ fn cooldown_key_candidates(state: &ApiSharedState, model: &str) -> Vec<String> {
             keys.push(id);
         }
     }
+    // 模型同义组（model_alias）：成员真实 id 均可能被记冷却键（Buddy/Qoder 侧），
+    // 收尾归因时一并覆盖，防 503 排除漏键
+    if let Some(g) = super::model_alias::resolve(&state.data_dir, model) {
+        for m in &g.members {
+            let name = m.model.trim().to_string();
+            if !name.is_empty() && !keys.contains(&name) {
+                keys.push(name);
+            }
+        }
+    }
     keys
 }
 
@@ -760,6 +770,17 @@ fn whitelist_check(state: &ApiSharedState, model: &str, proto: Protocol) -> Opti
     ];
     for base in bases.into_iter().flatten() {
         if unified_catalog::whitelist_allows(&list, &base) {
+            return None;
+        }
+    }
+    // 模型同义组（model_alias）：对外 id 与任一成员 id 等价——任一侧命中白名单
+    // 即放行（启用白名单的部署不得因同义组层被 404）
+    if let Some(g) = super::model_alias::resolve(&state.data_dir, stripped) {
+        if unified_catalog::whitelist_allows(&list, &g.id)
+            || g.members
+                .iter()
+                .any(|m| unified_catalog::whitelist_allows(&list, &m.model))
+        {
             return None;
         }
     }
@@ -1538,6 +1559,18 @@ fn strip_bracket_1m(name: &str) -> Option<&str> {
 /// WB 路由解析命中目录且上游启用 / buddy-ai Intl 目录命中且国际档启用 /
 /// Trae 模型列表 canonical 命中
 fn anthropic_model_servable(state: &ApiSharedState, model: &str) -> bool {
+    // 模型同义组（model_alias）：对外 id/任一成员 id 可服务 → 整体可路由。
+    // 成员校验走无别名版判定（不解别名，防组内自引用递归）
+    if let Some(g) = super::model_alias::resolve(&state.data_dir, model) {
+        if g.members.iter().any(|m| model_servable_raw(state, &m.model)) {
+            return true;
+        }
+    }
+    model_servable_raw(state, model)
+}
+
+/// 可路由原始判定（不解析同义组，供 [`anthropic_model_servable`] 复用）
+fn model_servable_raw(state: &ApiSharedState, model: &str) -> bool {
     if super::custom_models::find_enabled(&state.data_dir, model).is_some() {
         return true;
     }
@@ -3962,6 +3995,8 @@ mod tests {
             rate: None,
             enabled: false,
             disabled,
+            rate_base: None,
+            rate_window: None,
         }
     }
 

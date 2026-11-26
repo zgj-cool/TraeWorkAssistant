@@ -892,13 +892,14 @@ export default function QoderApiService() {
                   <tbody>
                     {models.map((m) => {
                       const ctxTokens = ctxMap.get(m.id.trim().toLowerCase());
-                      // 池级人工覆盖展示：禁用标记 / 人工星标 / 闲时徽标（窗口字段仅命中侧下发）
+                      // 池级人工覆盖展示：禁用标记 / 人工星标 / 闲时徽标
                       const qsrc = m.sources.find((s) => s.pool === 'qoder');
                       const disabled = qsrc?.disabled === true;
                       // 倍率口径对齐 Buddy 页：展示 Qoder 源倍率（与客户端 IDE 同源）；
                       // 顶层 m.rate 是调度命中池倍率（默认 buddy 优先，同名模型会显示 Buddy 值）
                       const qRate = qsrc?.rate ?? m.rate;
-                      const inDiscount = m.rate_window != null && m.rate_base != null;
+                      // 闲时折扣只看 Qoder 源自身（顶层字段是调度命中侧口径，多源同名时会串池）
+                      const inDiscount = qsrc?.rate_window != null && qsrc?.rate_base != null;
                       return (
                       <tr key={m.id} className="row-hover border-t border-slate-200/70 dark:border-zinc-800">
                         <td className="px-3 py-2 font-mono text-xs">
@@ -929,14 +930,14 @@ export default function QoderApiService() {
                           {inDiscount && (
                             <span
                               className="ml-1 rounded bg-emerald-100 px-1 py-0.5 text-[10px] font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300"
-                              title={`闲时折扣生效中（${m.rate_window}）：当前按 ${qRate?.toFixed(2)}x 调度，窗口外为 ${m.rate_base?.toFixed(2)}x`}
+                              title={`闲时折扣生效中（${qsrc?.rate_window}）：当前按 ${qRate?.toFixed(2)}x 调度，窗口外为 ${qsrc?.rate_base?.toFixed(2)}x`}
                             >
                               闲时
                             </span>
                           )}
                           {inDiscount && (
                             <span className="ml-1 text-[10px] text-slate-400 line-through dark:text-zinc-500">
-                              {m.rate_base?.toFixed(2)}
+                              {qsrc?.rate_base?.toFixed(2)}
                             </span>
                           )}
                         </td>

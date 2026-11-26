@@ -1094,9 +1094,10 @@ export default function ApiService() {
                     // 倍率口径对齐 Buddy/Qoder 页：展示 Trae 源倍率（与客户端 IDE 同源）；
                     // 顶层 m.rate 是调度命中池倍率（同名模型在 Buddy 目录时显示 Buddy 值）
                     const tRate = traeSrc?.rate ?? m.rate;
-                    // 闲时折扣生效（后端仅在命中窗口时下发 rate_window + rate_base）
+                    // 闲时折扣只看 Trae 源自身（traeSrc.rate_window/rate_base）——
+                    // 顶层 m.rate_window 是「调度命中侧」口径，多源同名时会串用其他池的窗口
                     const inDiscount =
-                      m.rate_window != null && m.rate_base != null && tRate != null;
+                      traeSrc?.rate_window != null && traeSrc?.rate_base != null && tRate != null;
                     return (
                     <tr
                       key={m.id}
@@ -1143,14 +1144,14 @@ export default function ApiService() {
                         {inDiscount && (
                           <span
                             className="ml-1 rounded bg-emerald-100 px-1 py-0.5 text-[10px] font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300"
-                            title={`闲时折扣生效中（${m.rate_window}）：当前按 ${tRate?.toFixed(2)}x 调度，窗口外为 ${m.rate_base?.toFixed(2)}x`}
+                            title={`闲时折扣生效中（${traeSrc?.rate_window}）：当前按 ${tRate?.toFixed(2)}x 调度，窗口外为 ${traeSrc?.rate_base?.toFixed(2)}x`}
                           >
                             闲时
                           </span>
                         )}
                         {inDiscount && (
                           <span className="ml-1 text-[10px] text-slate-400 line-through dark:text-zinc-500">
-                            {m.rate_base?.toFixed(2)}
+                            {traeSrc?.rate_base?.toFixed(2)}
                           </span>
                         )}
                       </td>

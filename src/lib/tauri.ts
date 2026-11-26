@@ -68,6 +68,8 @@ import type {
   TraeModelMeta,
   TraeLongContextView,
   UnifiedModel,
+  ModelAliasFile,
+  ModelAliasGroup,
   UsageDayView,
   CustomModel,
   WorkBuddyAccountView,
@@ -1153,6 +1155,11 @@ export const api = {
     // 返回归一后的生效值（canonical + 去空 + 去重）；落盘即时生效无需重启网关
     modelWhitelistSet: (models: string[]) =>
       invoke<string[]>('model_whitelist_set', { models }),
+    // 模型同义组（kv model_alias）：把各池同一模型的不同 id 绑定到对外 id；
+    // get 返回整表，set 整表覆盖（后端校验后落库，网关即时生效）
+    modelAliasGet: () => invoke<ModelAliasFile>('model_alias_get'),
+    modelAliasSet: (groups: ModelAliasGroup[]) =>
+      invoke<ModelAliasFile>('model_alias_set', { groups }),
     // Trae 模型元数据 L1 覆盖层（§6.1 编辑弹框读写 data/trae_model_meta.json）：
     // 顶层参数 camelCase；meta 嵌套字段保持 snake_case；null 字段 = 未设置，交由下层兜底
     // metaGet 用于编辑弹框回显跨会话人工值（null = 无人工值，全字段交由下层兜底）

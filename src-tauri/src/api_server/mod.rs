@@ -10,6 +10,7 @@ pub mod cross_pool;
 pub mod dispatch;
 pub mod efforts;
 pub mod gateway_settings;
+pub mod model_alias;
 pub mod models_sync;
 pub mod org_index;
 pub mod pool;

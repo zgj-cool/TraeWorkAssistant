@@ -15,13 +15,14 @@ import GatewayHeader from './GatewayHeader';
 import InterfaceConfig from './InterfaceConfig';
 import ApiKeysManager from './ApiKeysManager';
 import CustomModelsPanel from './CustomModelsPanel';
+import ModelAliasPanel from './ModelAliasPanel';
 import EcoAccess from './EcoAccess';
 import FingerprintSanitizePanel from './FingerprintSanitizePanel';
 import ResourceSummary from './ResourceSummary';
 import ToolAliasPanel from './ToolAliasPanel';
 import UsageStatsPanel from './UsageStatsPanel';
 
-type TabKey = 'overview' | 'config' | 'keys' | 'usage' | 'custom' | 'eco' | 'sanitize' | 'toolalias';
+type TabKey = 'overview' | 'config' | 'keys' | 'usage' | 'custom' | 'alias' | 'eco' | 'sanitize' | 'toolalias';
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: 'overview', label: '概览' },
@@ -29,6 +30,7 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: 'keys', label: 'API Keys 管理' },
   { key: 'usage', label: '用量统计' },
   { key: 'custom', label: '自定义模型' },
+  { key: 'alias', label: '模型同义组' },
   { key: 'eco', label: '生态接入' },
   { key: 'sanitize', label: '指纹清洗' },
   { key: 'toolalias', label: '工具别名' },
@@ -102,6 +104,7 @@ export default function ApiManagerModal() {
         {tab === 'custom' && (
           <CustomModelsPanel onSubModalChange={(v) => { subOpenRef.current = v; }} />
         )}
+        {tab === 'alias' && <ModelAliasPanel />}
         {tab === 'eco' && <EcoAccess />}
         {tab === 'sanitize' && <FingerprintSanitizePanel />}
         {tab === 'toolalias' && <ToolAliasPanel />}

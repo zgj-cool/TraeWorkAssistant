@@ -20,20 +20,30 @@ import { buildOverview, type OverviewData } from './overview/overviewModel';
 import { PlatformCard, PLATFORMS } from './overview/OverviewCards';
 
 type Data = Omit<OverviewData, 'nowMs'>;
+/** 局部刷新可单独覆盖的 Qoder 字段（采集完成 → 只重拉这几项并合并） */
+type QoderPatch = Partial<
+  Pick<Data, 'qoderAccounts' | 'qoderCredits' | 'qoderWeb' | 'qoderCheckin' | 'qoderSnapshots'>
+>;
 
 export default function Overview() {
   const openPlatformView = useAppStore((s) => s.openPlatformView);
   const pushToast = useAppStore((s) => s.pushToast);
   const [data, setData] = useState<Data | null>(null);
   const [loading, setLoading] = useState(false);
+  // Qoder 官网采集单独计时：与全量拉取并发，按钮不必等采集跑完
+  const [qoderSyncing, setQoderSyncing] = useState(false);
   const [failed, setFailed] = useState<string[]>([]);
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
   const swrRetries = useRef(0);
   const loadingRef = useRef(false);
+  const qoderSyncingRef = useRef(false);
+  const qoderPatch = useRef<{ at: number; patch: QoderPatch } | null>(null);
 
   const load = useCallback(async (resetSwr = false, freshOfficial = false): Promise<string[]> => {
     if (loadingRef.current) return [];
     loadingRef.current = true;
+    // 发起时刻：期间落地的 Qoder 局部刷新比本次读到的缓存新时才允许覆盖
+    const startedAt = Date.now();
     if (resetSwr) swrRetries.current = 0;
     setLoading(true);
     const errors: string[] = [];
@@ -68,7 +78,7 @@ export default function Overview() {
         take(api.apiServer.customUsageStats(1), null as UsageDayView[] | null, '网关自定义用量'),
         take(api.apiServer.qoderUsageStats(1), null as UsageDayView[] | null, '网关 Qoder 用量'),
       ]);
-      setData({
+      const next: Data = {
         traeAccounts: useAppStore.getState().accounts,
         traeUsage,
         wbAccounts,
@@ -89,7 +99,12 @@ export default function Overview() {
           custom: gwCustom,
           qoder: gwQoder,
         },
-      });
+      };
+      // 本次全量拉取期间落地的 Qoder 局部刷新优先覆盖：
+      // 全量 load 的 Qoder 各项在读缓存时，官网采集可能尚未落盘。
+      const pending = qoderPatch.current;
+      qoderPatch.current = null;
+      setData(pending && pending.at > startedAt ? { ...next, ...pending.patch } : next);
       setFailed(errors);
       setUpdatedAt(Date.now());
       return errors;
@@ -140,30 +155,63 @@ export default function Overview() {
   const view = useMemo(() => (data ? buildOverview({ ...data, nowMs: Date.now() }) : null), [data]);
   const kpis = view?.kpis;
 
+  // Qoder 采集完成后的局部刷新：只重拉 Qoder 五项并合并进当前快照。
+  // 不重跑全量 load，避免二次强制拉取 Trae/Buddy 官网用量（全量聚合 20-53s）。
+  const reloadQoder = useCallback(async () => {
+    const [accounts, credits, web, checkin, history] = await Promise.all([
+      api.qoder.accountsList().catch(() => null),
+      api.qoder.creditsFetch(undefined, false).catch(() => null),
+      api.qoder.webUsageGet().catch(() => null),
+      api.qoder.checkinResults(1).catch(() => null),
+      api.qoder.creditsHistoryList().catch(() => null),
+    ]);
+    const patch: QoderPatch = {};
+    if (accounts) patch.qoderAccounts = accounts;
+    if (credits) patch.qoderCredits = credits;
+    if (web) patch.qoderWeb = web;
+    if (checkin) patch.qoderCheckin = checkin;
+    if (history) patch.qoderSnapshots = history.snapshots;
+    if (Object.keys(patch).length === 0) return;
+    const at = Date.now();
+    // 页面数据尚未就绪时先存下，由 load 完成时合并
+    qoderPatch.current = { at, patch };
+    setData((d) => (d ? { ...d, ...patch } : d));
+  }, []);
+
   const refresh = () => {
-    void withMinDelay(
-      (async () => {
-        // 先静默同步 Qoder 官网用量（已采集账号 → 隐藏窗口 + 已存登录态，无需重登）。
-        // 页面数据未就绪时向本地缓存取一次，避免首次加载完前点刷新不相步。
-        const view = data?.qoderWeb ?? (await api.qoder.webUsageGet().catch(() => null));
-        const collected = view?.accounts ?? [];
-        if (collected.length > 0) {
-          pushToast('info', `正在后台同步 Qoder 官网用量（${collected.length} 个账号）…`);
-          const r = await syncQoderWebAccounts(collected);
-          if (r.ok > 0) {
-            pushToast('success', `Qoder 官网用量已同步 ${r.ok}/${r.total} 个账号`);
-          }
-          if (r.failed.length > 0) {
-            pushToast(
-              'warn',
-              `${r.failed.length} 个账号同步失败（登录态可能已过期），请到 Qoder 积分看板重新采集`,
-            );
-          }
+    // Qoder 官网采集（逐账号串行、后端采集窗口互斥）与其余平台全量拉取互不依赖：
+    // 并发启动，避免「先等 Qoder 采完再刷其他平台」把两段耗时串成加法。
+    const qoderTask = (async () => {
+      if (qoderSyncingRef.current) return;
+      // 页面数据未就绪时向本地缓存取一次，避免首次加载完前点刷新不相步。
+      const current = data?.qoderWeb ?? (await api.qoder.webUsageGet().catch(() => null));
+      const collected = current?.accounts ?? [];
+      if (collected.length === 0) return;
+      qoderSyncingRef.current = true;
+      setQoderSyncing(true);
+      pushToast('info', `正在后台同步 Qoder 官网用量（${collected.length} 个账号）…`);
+      try {
+        const r = await syncQoderWebAccounts(collected);
+        if (r.ok > 0) {
+          pushToast('success', `Qoder 官网用量已同步 ${r.ok}/${r.total} 个账号`);
         }
-        return load(true, true);
-      })(),
-      600,
-    ).then((errors) =>
+        if (r.failed.length > 0) {
+          pushToast(
+            'warn',
+            `${r.failed.length} 个账号同步失败（登录态可能已过期），请到 Qoder 积分看板重新采集`,
+          );
+        }
+        await reloadQoder();
+      } finally {
+        qoderSyncingRef.current = false;
+        setQoderSyncing(false);
+      }
+    })();
+    void qoderTask.catch((err) => {
+      pushToast('warn', `Qoder 官网同步失败：${String(err)}`);
+    });
+
+    void withMinDelay(load(true, true), 600).then((errors) =>
       pushToast(errors.length ? 'warn' : 'success', errors.length ? '部分数据源加载失败，已保留其余平台数据' : '已刷新'),
     );
   };
@@ -180,6 +228,7 @@ export default function Overview() {
           <div className="flex items-center gap-2">
             {updatedAt && <span className="text-[12px] text-slate-400 dark:text-zinc-500">更新于 {new Date(updatedAt).toLocaleTimeString('zh-CN', { hour12: false })}</span>}
             {refreshing && <Badge tone="blue"><Spinner className="mr-1 h-3 w-3" /> 积分后台刷新中</Badge>}
+            {qoderSyncing && <Badge tone="blue"><Spinner className="mr-1 h-3 w-3" /> Qoder 官网同步中</Badge>}
             {officialRefreshing && <Badge tone="blue"><Spinner className="mr-1 h-3 w-3" /> 已用积分后台刷新中</Badge>}
             {data?.wbOfficial?.stale && <Badge tone="amber" title={data.wbOfficial.stale_reason}>Buddy 官网用量过期缓存</Badge>}
             {failed.length > 0 && <Badge tone="amber" title={failed.join('、')}>{failed.length} 项数据源未加载</Badge>}
@@ -238,7 +287,7 @@ export default function Overview() {
       </div>
 
       <p className="mt-5 text-[12px] leading-relaxed text-slate-500 dark:text-zinc-400">
-        统计口径：Trae 今日已用取官网消耗明细（usage_history_fetch，缓存命中时标注）；Buddy 取官网用量聚合（workbuddy_usage_official_all），官网不可用时回退本地快照；Qoder 优先取官网采集（Webview 同源 fetch，每个账号独立登录、按账号归档并做 uid 校验），不可用时依次回退 API 网关 Qoder 池实测积分、官网会话消耗明细与本地积分快照差分。Token 消耗取 API 网关按落日用量（Trae / Buddy / Qoder 三池，按账号归入对应平台卡片；BuddyAI / 自定义池见 API 管理页用量统计）。刷新会强制重拉 Trae/Buddy 官网用量（跳过 10min 缓存，全量聚合需数十秒）；Qoder 官网采集需在积分看板点「官网采集」并登录。
+        统计口径：Trae 今日已用取官网消耗明细（usage_history_fetch，缓存命中时标注）；Buddy 取官网用量聚合（workbuddy_usage_official_all），官网不可用时回退本地快照；Qoder 优先取官网采集（Webview 同源 fetch，每个账号独立登录、按账号归档并做 uid 校验），不可用时依次回退 API 网关 Qoder 池实测积分、官网会话消耗明细与本地积分快照差分。Token 消耗取 API 网关按落日用量（Trae / Buddy / Qoder 三池，按账号归入对应平台卡片；BuddyAI / 自定义池见 API 管理页用量统计）。刷新会强制重拉 Trae/Buddy 官网用量（跳过 10min 缓存，全量聚合需数十秒），并与 Qoder 官网采集（已采集账号逐账号静默重采）并发执行，互不阻塞；Qoder 官网采集首次需在积分看板点「官网采集」并登录。
       </p>
     </div>
   );

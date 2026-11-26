@@ -515,6 +515,22 @@ pub fn resolve_target(
         Some((pool, bare)) => (Some(pool), bare),
         None => (None, model),
     };
+    // 模型同义组（model_alias）：请求名 → 各池真实 id。对外 id 或任一成员 id 均
+    // 命中同一组，下游源判定/执行按池取真实 id；未配置/未命中时各池名 = 请求名
+    // （零行为差异）。池前缀语义不受影响：`trae/对外id` 仍锁定 Trae 池
+    let alias_group = super::model_alias::resolve(&state.data_dir, model);
+    let name_of = |pool: &str| -> String {
+        alias_group
+            .as_ref()
+            .and_then(|g| g.member(pool))
+            .map(str::to_string)
+            .unwrap_or_else(|| model.to_string())
+    };
+    let buddy_name = name_of("buddy");
+    let buddy_ai_name = name_of("buddy-ai");
+    let trae_name = name_of("trae");
+    let qoder_name = name_of("qoder");
+    let custom_name = name_of("custom");
     // v3（P4）：⓪ custom 短路已移除——custom 为独立源，与前缀锁定解耦：
     // 源集合照常收集（下方 sources.custom 填充），前缀锁定只影响候选序
     //（custom/xxx = 单池候选直达；同名多源默认按统一调度规则、custom 尾部兜底）。
@@ -523,7 +539,7 @@ pub fn resolve_target(
     // ② 模型名归一化（四段管线）+ Buddy 源判定：管线命中目录 → Buddy 源存在
     let cfg = wb_model_route::load_config(&state.data_dir);
     let catalog = super::wb_catalog::load(&state.data_dir);
-    let r = wb_model_route::resolve(&cfg, &catalog, model);
+    let r = wb_model_route::resolve(&cfg, &catalog, &buddy_name);
     // Intl 目录动态化（2026-10-15）：动态抓取结果优先（kv buddy_ai_model_catalog），
     // 缺失回落内置静态表——/v3/config 实抓成功后倍率/上下文即随动态目录生效
     let intl_catalog = super::wb_catalog::buddy_ai_load(&state.data_dir);
@@ -545,11 +561,11 @@ pub fn resolve_target(
     // 国际档开启时 buddy-ai 池可服务（available 门控放行依据）
     let buddy_in_both = cn_hit
         && super::wb_catalog::find(&intl_catalog, &r.model)
-            .or_else(|| super::wb_catalog::find(&intl_catalog, model))
+            .or_else(|| super::wb_catalog::find(&intl_catalog, &buddy_ai_name))
             .is_some();
     let intl_hit = if !cn_hit && buddy_ai_enabled {
         super::wb_catalog::find(&intl_catalog, &r.model)
-            .or_else(|| super::wb_catalog::find(&intl_catalog, model))
+            .or_else(|| super::wb_catalog::find(&intl_catalog, &buddy_ai_name))
             .map(|m| (m.id.clone(), None))
     } else {
         None
@@ -655,25 +671,25 @@ pub fn resolve_target(
     // 劫持到 Trae 池（审查 m1）。resolve 先 CN 区后 Global 区——v1 恒以 CN 网关
     // 执行，区域分流见 qoder_route 注释。final model 取目录归一化 id。
     // v1 不做路由后缀剥离（-thinking/-max 是 WB/Trae 侧机制），请求素材由执行路径按条目再查
-    let qoder_hit = qoder_upstream::resolve(model, qoder_upstream::QoderRegion::Cn)
+    let qoder_hit = qoder_upstream::resolve(&qoder_name, qoder_upstream::QoderRegion::Cn)
         .and_then(|entry| entry.get("id").and_then(Value::as_str).map(str::to_string))
         // 池级人工开关（pool_model_meta.enabled=false）→ Qoder 源剔除
         .filter(|id| pool_meta_enabled("qoder", &canonical_id(id)));
     let trae_final = if buddy_hit.is_none() {
-        if in_trae(model) {
+        if in_trae(&trae_name) {
             // 整名命中：真模型名透传，不做任何后缀剥离
-            (model.to_string(), None, false)
+            (trae_name.clone(), None, false)
         } else if qoder_hit.is_some() {
             // Qoder 目录命中且整名未命中 Trae 列表：跳过后缀剥离，整名保留
             // （剥离只服务 WB/Trae 侧机制，此处剥离会把 Qoder 专属模型改写为
             // 基名误路由 Trae）
-            (model.to_string(), None, false)
-        } else if let Some((base, hint)) = wb_model_route::strip_route_suffix(model, &cfg)
+            (trae_name.clone(), None, false)
+        } else if let Some((base, hint)) = wb_model_route::strip_route_suffix(&trae_name, &cfg)
             .filter(|(base, _)| in_trae(base))
         {
             (base, hint, false)
         } else if let Some(base) =
-            wb_model_route::strip_max_suffix(model).filter(|base| in_trae(base))
+            wb_model_route::strip_max_suffix(&trae_name).filter(|base| in_trae(base))
         {
             // 可观测性：基名在 Trae 列表但不在 Max Mode 支持表（efforts::
             // TRAE_MAX_MODE_REF）→ 注入层将静默跳过 is_max_mode，落日志避免
@@ -690,10 +706,10 @@ pub fn resolve_target(
             }
             (base, None, true)
         } else {
-            (model.to_string(), None, false)
+            (trae_name.clone(), None, false)
         }
     } else {
-        (model.to_string(), None, false)
+        (trae_name.clone(), None, false)
     };
     let canonical = canonical_id(&trae_final.0);
     // issue #145 渠道内单模型开关：L1 meta.enabled=false 的模型不再作为 Trae 源
@@ -721,8 +737,37 @@ pub fn resolve_target(
         // v3 第四源：custom 上游组（P1 find_enabled_all，与 buddy/qoder 判定并列
         // 全量收集后按序筛选同构；命中信息由执行路径重新按 data_dir 读取一致性
         // 由 config_cache 5s TTL 保证，此处仅做源存在性与健康判定）
-        custom: super::custom_models::find_enabled_all(&state.data_dir, model),
+        custom: super::custom_models::find_enabled_all(&state.data_dir, &custom_name),
     };
+
+    // 可观测性（同义组生效时）：一个客户端 id 实际会打到哪几个池真实 id。
+    // 按组名 10 分钟节流（复用 fallback 日志时戳表），防正常流量刷爆 app 日志
+    if let Some(g) = &alias_group {
+        const ALIAS_LOG_THROTTLE_MS: i64 = 600_000;
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        let key = format!("alias|{}", canonical_id(&g.id));
+        let mut last_map = state
+            .fallback_log_last_ms
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if last_map.get(&key).map_or(true, |&t| now_ms - t >= ALIAS_LOG_THROTTLE_MS) {
+            if last_map.len() >= 256 {
+                last_map.clear();
+            }
+            last_map.insert(key, now_ms);
+            drop(last_map);
+            crate::fs_utils::app_log(
+                &state.data_dir,
+                &format!(
+                    "dispatch alias: requested={} public={} trae={} buddy={} qoder={} custom={}",
+                    model, g.id, trae_name, buddy_name, qoder_name, custom_name
+                ),
+            );
+        }
+    }
 
     let wb_enabled = state.wb_enabled.load(std::sync::atomic::Ordering::Relaxed);
     let qoder_enabled = state
@@ -847,7 +892,7 @@ pub fn resolve_target(
                         }
                         sticky_chain.push(PoolCandidate {
                             pool: p,
-                            model: final_model_for(p, &sources, model),
+                            model: final_model_for(p, &sources, &custom_name),
                             effort_hint: effort_for(p, &sources),
                         });
                     }
@@ -855,7 +900,7 @@ pub fn resolve_target(
                 record_sticky(state, sk, pool);
                 return Ok(Resolved {
                     pool,
-                    model: final_model_for(pool, &sources, model),
+                    model: final_model_for(pool, &sources, &custom_name),
                     effort_hint: effort_for(pool, &sources),
                     max_mode_hint: max_mode_for(pool, &sources),
                     fallback_from: None,
@@ -894,8 +939,8 @@ pub fn resolve_target(
         }
     }
     // ④+ 智能调度（strategy=smart）：可用源 ≥2 且无 per_model 显式覆盖时，
-    // 按请求模型对候选池重排（到期 → 倍率/免费 → 积分多；并列保持优先级序）。
-    // 有绑定/前缀锁定时跳过（绑定序/单池即最终候选序）
+    // 按请求模型对候选池重排（倍率，差 ≤20% 视为并列 → 到期 → 积分多；
+    // 全并列保持优先级序）。有绑定/前缀锁定时跳过（绑定序/单池即最终候选序）
     if forced_pool.is_none() && bind.is_none()
         && policy.strategy == DispatchStrategy::Smart
         && policy.per_model.get(&canonical).is_none()
@@ -944,7 +989,7 @@ pub fn resolve_target(
                     {
                         chain.push(PoolCandidate {
                             pool,
-                            model: final_model_for(pool, &sources, model),
+                            model: final_model_for(pool, &sources, &custom_name),
                             effort_hint: effort_for(pool, &sources),
                         });
                     }
@@ -952,7 +997,7 @@ pub fn resolve_target(
                 }
                 win = Some((
                     pool,
-                    final_model_for(pool, &sources, model),
+                    final_model_for(pool, &sources, &custom_name),
                     effort_for(pool, &sources),
                     max_mode_for(pool, &sources),
                 ));
@@ -1108,14 +1153,20 @@ pub fn pool_session_key(body: &Value) -> Option<String> {
 
 // ==================== 智能调度（§4.2 DispatchStrategy::Smart） ====================
 
-/// 智能调度排序键：①最早积分到期（`None` = 无到期数据，该维度不参与比较）
-/// ②模型倍率（升序，0 = 免费最优，未声明 = f64::MAX 后置）③健康积分总和多优先（负值升序）
+/// 智能调度排序键：①模型倍率（升序，0 = 免费最优，未声明 = f64::MAX 后置；
+/// 相对差 ≤ 20% 视为「成本相当」并列 → 下沉到期键）②最早积分到期（`None` =
+/// 无到期数据，该维度不参与比较）③健康积分总和多优先（负值升序）
+///
+/// 倍率键置于到期键之前（2026-11 修订）：闲时折扣把 Trae 降到 0.06x 时必须以
+/// 低成本优先，而实务中三池都有到期数据，旧的「到期硬优先」会永久压制倍率键；
+/// 但微小价差不足以改变「先消耗临期积分」的预期，故用 20% 带宽把近似倍率判为
+/// 并列（见 [`rate_band_cmp`]）。
 ///
 /// 到期键用 `Option<i64>` 而非 `i64::MAX` 占位：原实现把「无到期数据」压成
 /// 最大值恒后置，导致只要对侧池有到期时间（Buddy 常见）就**永久压制倍率键**——
 /// 闲时折扣把 Trae 降到 0.06x 也选不中（实测 12:00–14:00 仍走 Buddy）。
 /// 现语义：两侧都有到期数据才比到期（先到期先消耗），任一侧缺失即视为
-/// 「该维度无可比信息」，比较结果并列并下沉到倍率键，避免用缺失值当极小值。
+/// 「该维度无可比信息」，比较结果并列并下沉到积分键，避免用缺失值当极小值。
 struct SmartKey {
     /// 最早积分到期（Unix 秒）；None = 无到期信息
     expire: Option<i64>,
@@ -1125,10 +1176,11 @@ struct SmartKey {
     neg_total: f64,
 }
 
-/// 双源候选池按「到期 → 倍率/免费 → 积分多」复合键稳定排序；
+/// 双源候选池按「倍率（20% 带宽内并列）→ 到期 → 积分多」复合键稳定排序；
 /// 全并列保持传入序（= priority/per_model 固定优先级，Buddy 优先现状）。
 ///
-/// 到期维度仅在**两侧都有数据**时生效（见 [`SmartKey::expire`] 说明）。
+/// 倍率带宽内视为并列 → 回到「先到期先消耗」；超出带宽 → 低成本优先，不再看
+/// 到期。到期维度仅在**两侧都有数据**时生效（见 [`SmartKey::expire`] 说明）。
 fn smart_pool_order(
     state: &Arc<ApiSharedState>,
     order: &[TargetPool],
@@ -1140,25 +1192,16 @@ fn smart_pool_order(
     let wb_stats = state.wb_pool.stats();
     let buddy_ai_stats = state.buddy_ai_pool.stats();
     let qoder_stats = state.qoder_pool.stats();
-    // 倍率数据源：Buddy = wb 目录原始值（0 = 免费）；Trae = 官网同步声明值（None = 未声明）；
-    // Qoder = 目录 credits 文本解析（"x0.1 credits" → 0.1）。
+    // 倍率数据源：Buddy = wb 目录原始值（0 = 免费）；Qoder = 目录 credits 文本解析
+    //（"x0.1 credits" → 0.1）；Trae 走 unified_catalog 的统一链（见下）。
     // 各列表均为内存缓存，热路径零磁盘读。
     //
-    // 闲时折扣（Trae）：官网同步写入的单一倍率只是「同步时刻」的快照（同一模型
-    // 闲时得 0.06、非闲时得 0.11），不能代表全天成本。此处叠加 L1 覆盖层的
-    // 时段规则（trae_model_meta.rate_windows）：当前处于折扣窗口 → 用折后倍率
-    // 参与排序，否则回落基准倍率。规则与目录聚合共用 unified_catalog 的同一判定，
+    // 闲时折扣（三源同口径）：官网同步写入的单一倍率只是「同步时刻」的快照（同一模型
+    // 闲时得 0.06、非闲时得 0.11），不能代表全天成本。此处经 unified_catalog 叠加
+    // L1 时段规则（rate_windows）：当前处于折扣窗口 → 用折后倍率参与排序，否则回落
+    // 基准链（Trae：L1 人工 rate → L2 官网 → L3 参考）。规则与目录聚合共用同一判定，
     // 保证「展示的倍率」与「调度依据」不漂移。
-    let trae_base = models_sync::load_models(&state.data_dir)
-        .iter()
-        .find(|m| canonical_id(&m.id) == canonical)
-        .and_then(|m| m.rate);
-    let trae_meta = super::unified_catalog::load_meta(&state.data_dir);
-    let trae_rate = super::unified_catalog::effective_rate_now(
-        trae_meta.get(canonical),
-        trae_base,
-    )
-    .0;
+    let trae_rate = super::unified_catalog::trae_effective_rate_now(&state.data_dir, canonical);
     // Buddy/Qoder 池级人工覆盖（kv pool_model_meta）：基准倍率修正 + 时段规则
     // 与目录展示共用 unified_catalog 判定，保证「展示的倍率」与「调度依据」不漂移
     let pool_meta = super::unified_catalog::load_pool_meta(&state.data_dir);
@@ -1243,16 +1286,52 @@ fn smart_pool_order(
     let mut sorted = order.to_vec();
     sorted.sort_by(|a, b| {
         let (ka, kb) = (key_of(*a), key_of(*b));
-        // 到期键：两侧都有数据才比较；任一侧缺失 = 该维度并列 → 下沉到倍率键
-        let expire_cmp = match (ka.expire, kb.expire) {
-            (Some(x), Some(y)) => x.cmp(&y),
-            _ => std::cmp::Ordering::Equal,
-        };
-        expire_cmp
-            .then_with(|| ka.rate.partial_cmp(&kb.rate).unwrap_or(std::cmp::Ordering::Equal))
-            .then_with(|| ka.neg_total.partial_cmp(&kb.neg_total).unwrap_or(std::cmp::Ordering::Equal))
+        // ① 倍率键（带宽内并列）：闲时折扣显著更低才按成本选池；差异 ≤ 20%
+        //    视为成本相当 → 下沉到期键，避免微小价差把临期积分池挤掉
+        rate_band_cmp(ka.rate, kb.rate)
+            .then_with(|| {
+                // ② 到期键：两侧都有数据才比较；任一侧缺失 = 该维度并列 → 下沉积分键
+                match (ka.expire, kb.expire) {
+                    (Some(x), Some(y)) => x.cmp(&y),
+                    _ => std::cmp::Ordering::Equal,
+                }
+            })
+            .then_with(|| {
+                ka.neg_total
+                    .partial_cmp(&kb.neg_total)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
     });
     sorted
+}
+
+/// 倍率容差带：`hi ≤ lo × 1.20`（相对较低倍率 20%）视为「成本相当」。
+const RATE_TOLERANCE_RATIO: f64 = 1.20;
+
+/// 带宽内倍率比较（升序：低成本优先）：
+/// - 差异 ≤ 20% → `Equal`（并列，交给到期/积分键决定，保住「先消耗临期积分」）；
+/// - 差异 > 20% → 低倍率胜出；
+/// - `f64::MAX` = 未声明倍率（无成本信息）→ 有声明的一侧优先；
+/// - 0 = 免费 → 与任何 >0 值差距不是有限倍数，免费恒胜出。
+/// NaN 已在 [`smart_pool_order`] 的 `key_of` 归一为 `f64::MAX`，不会流到此处。
+fn rate_band_cmp(a: f64, b: f64) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    if a == b {
+        return Ordering::Equal;
+    }
+    // 任一侧未声明倍率 = 无成本信息 → 有声明的一侧优先（值小者胜出）
+    if a == f64::MAX || b == f64::MAX {
+        return a.partial_cmp(&b).unwrap_or(Ordering::Equal);
+    }
+    let (lo, hi) = if a < b { (a, b) } else { (b, a) };
+    if lo <= 0.0 {
+        return a.partial_cmp(&b).unwrap_or(Ordering::Equal);
+    }
+    if hi <= lo * RATE_TOLERANCE_RATIO {
+        Ordering::Equal
+    } else {
+        a.partial_cmp(&b).unwrap_or(Ordering::Equal)
+    }
 }
 
 /// 首选池健康检查：Buddy 池额外检查模型级冷却（优先级高于账号级）
@@ -2127,9 +2206,12 @@ mod tests {
     // ---------- 维度三：池状态 ----------
 
     /// 双源 + Buddy 池耗尽 → 跨池回退 Trae + fallback_from 记录
+    ///（priority 模式：隔离 smart 排序，专验证回退链）
     #[test]
     fn t08_dual_buddy_exhausted_falls_back_trae() {
-        let f = fixture(&["glm-5.3"], Some(&["glm-5.3"]), Some(&policy_default()));
+        let mut p = policy_default();
+        p.strategy = DispatchStrategy::Priority;
+        let f = fixture(&["glm-5.3"], Some(&["glm-5.3"]), Some(&p));
         f.seed_healthy(true);
         // wb_pool 空 = 无健康账号
         let r = f.resolve("glm-5.3").unwrap();
@@ -2224,9 +2306,11 @@ mod tests {
     }
 
     /// fallback=false + 双源 + 首选池耗尽 → 不回退，显式报错
+    ///（priority 模式：隔离 smart 排序，专验证 fallback 开关语义）
     #[test]
     fn t16_fallback_disabled_no_cross_pool() {
         let mut p = policy_default();
+        p.strategy = DispatchStrategy::Priority;
         p.fallback = false;
         let f = fixture(&["glm-5.3"], Some(&["glm-5.3"]), Some(&p));
         f.seed_healthy(true); // Trae 池健康，但 fallback 关闭
@@ -2257,9 +2341,12 @@ mod tests {
     }
 
     /// 粘性池不可用（Buddy 耗尽）→ 实时回退，不卡死在粘性池
+    ///（priority 模式：先稳定落 Buddy 写入粘性，专验证粘性池失效后的回退）
     #[test]
     fn t18_sticky_pool_unavailable_falls_back() {
-        let f = fixture(&["glm-5.3"], Some(&["glm-5.3"]), Some(&policy_default()));
+        let mut p = policy_default();
+        p.strategy = DispatchStrategy::Priority;
+        let f = fixture(&["glm-5.3"], Some(&["glm-5.3"]), Some(&p));
         f.seed_healthy(true);
         f.seed_healthy(false);
         assert_eq!(f.resolve("glm-5.3").unwrap().pool, TargetPool::Buddy);
@@ -2883,15 +2970,17 @@ mod tests {
 
     // ---------- 智能调度（DispatchStrategy::Smart） ----------
 
-    /// smart：Buddy 声明倍率 0.5 < Trae 未声明（后置）→ 即使 priority trae 优先也选 Buddy
+    /// smart：Buddy 声明倍率 0.2 < Trae 未声明（L3 也无参考 → 后置）→ 即使
+    /// priority trae 优先也选 Buddy。用无 L3 参考的 glm-5 隔离「未声明」语义
+    ///（glm-5.3 有 RATE_REF 0.78，与 Buddy 目录同值，不再表达后置）
     #[test]
     fn t28_smart_prefers_declared_rate() {
         let mut p = policy_default();
         p.priority = vec!["trae".into(), "buddy".into()];
-        let f = fixture(&["glm-5.3"], Some(&["glm-5.3"]), Some(&p));
+        let f = fixture(&["glm-5"], Some(&["glm-5"]), Some(&p));
         f.seed_healthy(true);
         f.seed_healthy(false);
-        assert_eq!(f.resolve("glm-5.3").unwrap().pool, TargetPool::Buddy);
+        assert_eq!(f.resolve("glm-5").unwrap().pool, TargetPool::Buddy);
     }
 
     /// smart：Trae 声明更低倍率 0.3 < Buddy 0.5 → Trae 胜出（倍率序反向验证）
@@ -2939,14 +3028,16 @@ mod tests {
         );
     }
 
-    /// 到期键在位时仍按「先到期先消耗」生效：两侧都有数据 → 先到期者胜出，
-    /// 即使其倍率更高（保证既能比倍率、也不丢原有临期优先语义）
+    /// 倍率带宽内（相对差 ≤20%）视为成本相当 → 仍按「先到期先消耗」：
+    /// Trae 0.68 vs Buddy 0.78（差 14.7%）→ 成本并列，Buddy 临期更早 → Buddy 胜出
     #[test]
-    fn t29c_smart_expire_wins_when_both_declared() {
+    fn t29c_smart_expire_wins_within_rate_band() {
         let f = fixture(&["glm-5.3"], Some(&["glm-5.3"]), Some(&policy_default()));
-        // Trae 倍率更低（0.06），但积分临期更晚；Buddy 倍率 0.5 但即将到期
         crate::store::db(&f.dir)
-            .kv_set("api_models", &json!([{"id": "glm-5.3", "label": "glm-5.3", "rate": 0.06}]))
+            .kv_set(
+                "api_models",
+                &json!([{"id": "glm-5.3", "label": "glm-5.3", "rate": 0.68}]),
+            )
             .unwrap();
         super::super::config_cache::invalidate(&f.dir, "api_models");
         let now = super::now_ts();
@@ -2955,7 +3046,29 @@ mod tests {
         assert_eq!(
             f.resolve("glm-5.3").unwrap().pool,
             TargetPool::Buddy,
-            "两侧都有到期数据时先到期者优先（临期优先语义保留）"
+            "倍率差 ≤20% 视为并列 → 先到期者优先（临期优先语义保留）"
+        );
+    }
+
+    /// 倍率差超出 20% 带宽 → 低成本优先，到期键不再压制：Trae 0.06 vs Buddy 0.5
+    ///（差 733%）即使 Buddy 临期更早也走 Trae（闲时折扣端到端语义）
+    #[test]
+    fn t29f_smart_rate_wins_beyond_band() {
+        let f = fixture(&["glm-5.3"], Some(&["glm-5.3"]), Some(&policy_default()));
+        crate::store::db(&f.dir)
+            .kv_set(
+                "api_models",
+                &json!([{"id": "glm-5.3", "label": "glm-5.3", "rate": 0.06}]),
+            )
+            .unwrap();
+        super::super::config_cache::invalidate(&f.dir, "api_models");
+        let now = super::now_ts();
+        f.seed_healthy_expire(true, Some(now + 30 * 86_400));
+        f.seed_healthy_expire(false, Some(now + 86_400));
+        assert_eq!(
+            f.resolve("glm-5.3").unwrap().pool,
+            TargetPool::Trae,
+            "倍率差 >20% → 低成本优先，到期键不压制"
         );
     }
 
@@ -3344,9 +3457,13 @@ mod tests {
 
         // buddy 无源目录走内置表 → 源存在但 wb_pool 无账号 → no_healthy_account；
         // trae 有源但 Key 作用域空集 → no_healthy_account；qoder 开关关闭 → switch_off
-        // → 无更多回退目标，提前终止归因 trae
+        // → 无更多回退目标，提前终止归因最后一个尝试池（smart 重排后可为 buddy）
         let r = f.resolve_key("glm-5.3", "k1");
-        assert!(matches!(r, Err(DispatchError::NoHealthy(TargetPool::Trae, _))), "{r:?}");
+        // 错误指向最后尝试的池（随 smart 排序可能为 trae/buddy），本用例只验证归因
+        assert!(
+            matches!(r, Err(DispatchError::NoHealthy(TargetPool::Trae | TargetPool::Buddy, _))),
+            "{r:?}"
+        );
         assert!(
             f.app_log_contains("dispatch exhausted: model=glm-5.3 key=k1"),
             "应落逐池归因日志"
@@ -3564,6 +3681,72 @@ mod tests {
     /// 仅 Trae 源模型 + trae_enabled=false → 显式报错（同族镜像；默认开不受影响）。
     /// ghost-model = 未知模型透传形态（单源 Trae：WB 路由未命中 + Qoder 目录未收录，
     /// t44 已固化其 buddy/qoder 双无源语义）
+    // ---------- 模型同义组（model_alias） ----------
+
+    /// 同义组：只有对外 id 触发按池映射；成员 id 自身请求零行为差异
+    #[test]
+    fn t_alias_group_routes_per_pool_member_id() {
+        let f = fixture(
+            &["DeepSeek-V4-Pro-Official"],
+            Some(&["deepseek-v4-pro"]),
+            Some(&policy_default()),
+        );
+        f.seed_healthy(true);
+        f.seed_healthy(false);
+        crate::store::db(&f.dir)
+            .kv_set(
+                "model_alias",
+                &json!({"groups": [
+                    {
+                        "id": "dsv4-pro",
+                        "members": [
+                            {"pool": "trae", "model": "DeepSeek-V4-Pro-Official"},
+                            {"pool": "buddy", "model": "deepseek-v4-pro"}
+                        ],
+                        "enabled": true
+                    },
+                    {
+                        "id": "deepseek-v4-pro",
+                        "members": [
+                            {"pool": "trae", "model": "DeepSeek-V4-Pro-Official"}
+                        ],
+                        "enabled": true
+                    }
+                ]}),
+            )
+            .unwrap();
+        super::super::config_cache::invalidate(&f.dir, "model_alias");
+        // 对外 id → 默认策略（buddy 优先）命中 Buddy，模型名取 Buddy 成员 id
+        let r = f.resolve_no_session("dsv4-pro").unwrap();
+        assert_eq!(r.pool, TargetPool::Buddy);
+        assert_eq!(r.model, "deepseek-v4-pro");
+        // 改为 Trae 优先：同一个对外 id → Trae 成员真实 id
+        let mut p = policy_default();
+        p.strategy = DispatchStrategy::Priority;
+        p.priority = vec!["trae".into(), "buddy".into()];
+        crate::store::db(&f.dir).kv_set("dispatch_policy", &p).unwrap();
+        super::super::config_cache::invalidate(&f.dir, "dispatch_policy");
+        let r = f.resolve_no_session("dsv4-pro").unwrap();
+        assert_eq!(r.pool, TargetPool::Trae);
+        assert_eq!(r.model, "DeepSeek-V4-Pro-Official");
+        // 成员 id 直呼：不触发映射（仍按原名原逻辑路由，零行为差异）
+        let r = f.resolve_no_session("DeepSeek-V4-Pro-Official").unwrap();
+        assert_eq!(r.pool, TargetPool::Trae);
+        assert_eq!(r.model, "DeepSeek-V4-Pro-Official");
+        // 对外 id 与某池真实 id 同名（deepseek-v4-pro 也是 Buddy 自身模型）：
+        // 组内只列了 trae 成员 → trae 优先命中成员真实 id，Buddy 回退请求名
+        let r = f.resolve_no_session("deepseek-v4-pro").unwrap();
+        assert_eq!(r.pool, TargetPool::Trae);
+        assert_eq!(r.model, "DeepSeek-V4-Pro-Official");
+        // Trae 关掉后：未列成员的 Buddy 按请求名命中自身模型（无需把同名池列入成员）
+        f.state
+            .trae_enabled
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        let r = f.resolve_no_session("deepseek-v4-pro").unwrap();
+        assert_eq!(r.pool, TargetPool::Buddy);
+        assert_eq!(r.model, "deepseek-v4-pro");
+    }
+
     #[test]
     fn t45_trae_only_disabled_errors() {
         let f = fixture(&["glm-5.3"], Some(&["hy4"]), Some(&policy_default()));

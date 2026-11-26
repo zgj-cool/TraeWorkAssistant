@@ -772,6 +772,8 @@ fn main() {
             commands::api_server::dispatch_policy_set,
             commands::api_server::model_whitelist_get,
             commands::api_server::model_whitelist_set,
+            commands::api_server::model_alias_get,
+            commands::api_server::model_alias_set,
             commands::api_server::gateway_settings_get,
             commands::api_server::gateway_settings_set,
             commands::api_server::lan_iface_ips,

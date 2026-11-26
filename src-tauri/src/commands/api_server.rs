@@ -2516,6 +2516,31 @@ pub fn model_whitelist_set(
     crate::api_server::unified_catalog::save_whitelist(&state.data_dir, &models)
 }
 
+/// 读取模型同义组配置（kv model_alias；空表 = 不启用，零行为差异）
+#[tauri::command]
+pub fn model_alias_get(
+    state: State<'_, AppState>,
+) -> crate::api_server::model_alias::AliasFile {
+    crate::api_server::model_alias::load(&state.data_dir)
+}
+
+/// 保存模型同义组（校验 → 落库 → 配置缓存失效，网关即时生效）；
+/// 返回落库后的整表（前端展示以返回值为准）
+#[tauri::command]
+pub fn model_alias_set(
+    state: State<'_, AppState>,
+    groups: Vec<crate::api_server::model_alias::AliasGroup>,
+) -> Result<crate::api_server::model_alias::AliasFile, String> {
+    let updated_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .ok();
+    let file = crate::api_server::model_alias::AliasFile { groups, updated_at };
+    crate::api_server::model_alias::validate(&file)?;
+    crate::api_server::model_alias::save(&state.data_dir, &file)?;
+    Ok(file)
+}
+
 /// 读取调度策略（规范化后视图：非法池名/空优先级已回退默认）
 #[tauri::command]
 pub fn dispatch_policy_get(

@@ -727,6 +727,12 @@ export interface UnifiedModelSource {
   enabled: boolean;
   /** L1 显式禁用（issue #145）：true = 该源被管理端单模型开关停用 */
   disabled: boolean;
+  /** 该源自身的闲时基准倍率（仅本源命中窗口时下发；池级页面展示用）。
+   *  与顶层 UnifiedModel.rate_base（调度命中侧口径）区分：多源同名时顶层可能
+   *  属于其他池，池级页面（Trae/Buddy/Qoder）必须读本字段 */
+  rate_base?: number | null;
+  /** 该源自身的折扣窗口标签（仅本源命中窗口时下发），同 rate_base 用途 */
+  rate_window?: string | null;
 }
 
 /** 统一模型目录条目（api_unified_models 返回，实时聚合派生视图） */
@@ -753,6 +759,33 @@ export interface UnifiedModel {
   /** L1 人工维护标记 */
   manual: boolean;
   sources: UnifiedModelSource[];
+}
+
+/** 模型同义组成员（某资源池内的真实模型 id） */
+export interface ModelAliasMember {
+  /** 资源池：trae/buddy/buddy-ai/qoder/custom */
+  pool: string;
+  /** 该池上游真实模型 id */
+  model: string;
+}
+
+/**
+ * 模型同义组（kv model_alias；model_alias_get/set）：
+ * 同一模型在各池 id 不同时绑定到一个对外 id，客户端只配一个模型名即可跨池调度。
+ * 仅对外 id 触发映射（成员 id 自身请求保持原路由），且不影响 /v1/models 目录。
+ */
+export interface ModelAliasGroup {
+  /** 对外 id（客户端配置的模型名；仅此名字触发映射，组间唯一） */
+  id: string;
+  members: ModelAliasMember[];
+  note: string;
+  enabled: boolean;
+}
+
+/** 同义组整表（保存时整表覆盖） */
+export interface ModelAliasFile {
+  groups: ModelAliasGroup[];
+  updated_at?: number | null;
 }
 
 /** 池间调度策略（data/dispatch_policy.json；dispatch_policy_get/set） */
