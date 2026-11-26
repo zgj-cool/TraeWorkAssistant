@@ -1087,13 +1087,16 @@ export default function ApiService() {
                 </thead>
                 <tbody>
                   {models.map((m) => {
-                    const traeDisabled =
-                      m.sources.find((s) => s.pool === 'trae')?.disabled === true;
+                    const traeSrc = m.sources.find((s) => s.pool === 'trae');
+                    const traeDisabled = traeSrc?.disabled === true;
                     const ctxId = m.id.trim().toLowerCase();
                     const ctxOn = longCtx?.has(ctxId) === true;
+                    // 倍率口径对齐 Buddy/Qoder 页：展示 Trae 源倍率（与客户端 IDE 同源）；
+                    // 顶层 m.rate 是调度命中池倍率（同名模型在 Buddy 目录时显示 Buddy 值）
+                    const tRate = traeSrc?.rate ?? m.rate;
                     // 闲时折扣生效（后端仅在命中窗口时下发 rate_window + rate_base）
                     const inDiscount =
-                      m.rate_window != null && m.rate_base != null && m.rate != null;
+                      m.rate_window != null && m.rate_base != null && tRate != null;
                     return (
                     <tr
                       key={m.id}
@@ -1136,11 +1139,11 @@ export default function ApiService() {
                       {/* 倍率：窗口内显示折后价 + 闲时徽标 + 基准值对照（rate_base 仅在命中
                           折扣窗口时下发，未命中时后端已清空，此处不用额外判断时区） */}
                       <td className="py-2 pr-3 text-right tabular-nums text-amber-600 dark:text-amber-400">
-                        {m.rate != null ? m.rate.toFixed(2) : '—'}
+                        {tRate != null ? tRate.toFixed(2) : '—'}
                         {inDiscount && (
                           <span
                             className="ml-1 rounded bg-emerald-100 px-1 py-0.5 text-[10px] font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300"
-                            title={`闲时折扣生效中（${m.rate_window}）：当前按 ${m.rate?.toFixed(2)}x 调度，窗口外为 ${m.rate_base?.toFixed(2)}x`}
+                            title={`闲时折扣生效中（${m.rate_window}）：当前按 ${tRate?.toFixed(2)}x 调度，窗口外为 ${m.rate_base?.toFixed(2)}x`}
                           >
                             闲时
                           </span>

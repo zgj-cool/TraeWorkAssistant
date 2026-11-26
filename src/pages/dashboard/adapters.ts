@@ -2,6 +2,7 @@ import type {
   CreditsDailySnapshot,
   QoderCheckinRecord,
   QoderCreditsSnapshot,
+  QoderWebUsage,
   UsageHistoryResult,
   WbCheckinRecord,
   WbCreditsSnapshot,
@@ -54,9 +55,96 @@ export function wbOfficialAllToPoints(r: WbUsageOfficialAll | null): BoardPoint[
 }
 
 /**
+ * 按账号筛选重算官网采集视图（uidSet = 池账号 id 集；null/空 = 直接用全池汇总）。
+ * 筛选后无任何已采集账号 → null（调用方回退网关/快照），避免全 0 视图冒充真实消耗。
+ */
+export function aggregateQoderWebAccounts(
+  r: QoderWebUsage | null,
+  uids: Set<string> | null,
+): QoderWebUsage | null {
+  if (!r) return null;
+  if (!uids || uids.size === 0 || !r.accounts) return r;
+  const picked = r.accounts.filter((a) => uids.has(a.account_id));
+  if (picked.length === 0) return null;
+  // 以顶层 daily 的日期轴为准（31 天零填充），逐账号相加
+  const slots = new Map<
+    string,
+    { usage: number; models: Map<string, { request_count: number; credit: number }> }
+  >();
+  for (const d of r.daily) slots.set(d.date, { usage: 0, models: new Map() });
+  let records = 0;
+  let billed = 0;
+  for (const a of picked) {
+    records += a.records_total;
+    billed += a.billed_total;
+    for (const d of a.daily ?? []) {
+      const slot = slots.get(d.date);
+      if (!slot) continue;
+      slot.usage += d.usage;
+      for (const m of d.models) {
+        const e = slot.models.get(m.model) ?? { request_count: 0, credit: 0 };
+        e.request_count += m.request_count;
+        e.credit += m.credit;
+        slot.models.set(m.model, e);
+      }
+    }
+  }
+  const daily = r.daily.map((d) => {
+    const slot = slots.get(d.date)!;
+    return {
+      date: d.date,
+      usage: slot.usage,
+      models: [...slot.models.entries()]
+        .map(([model, v]) => ({ model, request_count: v.request_count, credit: v.credit }))
+        .sort((x, y) => y.credit - x.credit),
+    };
+  });
+  const monthPrefix = (daily[daily.length - 1]?.date ?? '').slice(0, 7);
+  const modelTotals = new Map<string, { request_count: number; credit: number }>();
+  for (const d of daily) {
+    for (const m of d.models) {
+      const e = modelTotals.get(m.model) ?? { request_count: 0, credit: 0 };
+      e.request_count += m.request_count;
+      e.credit += m.credit;
+      modelTotals.set(m.model, e);
+    }
+  }
+  return {
+    ...r,
+    records_total: records,
+    billed_total: billed,
+    summary: {
+      usage_today: daily[daily.length - 1]?.usage ?? 0,
+      usage_7days: daily.slice(-7).reduce((s, d) => s + d.usage, 0),
+      usage_this_month: daily
+        .filter((d) => d.date.slice(0, 7) === monthPrefix)
+        .reduce((s, d) => s + d.usage, 0),
+    },
+    daily,
+    models: [...modelTotals.entries()]
+      .map(([model, v]) => ({ model, request_count: v.request_count, credit: v.credit }))
+      .sort((x, y) => y.credit - x.credit),
+    accounts_total: picked.length,
+    accounts: picked,
+  };
+}
+
+/**
+ * Qoder 官网采集聚合（Webview 同源 fetch，日 × 模型，31 天零填充）。
+ * 口径：名义消耗 original_credits；仅覆盖已采集账号。
+ */
+export function qoderWebToPoints(r: QoderWebUsage | null): BoardPoint[] {
+  if (!r) return [];
+  return r.daily.map((d) => {
+    const models: BoardPoint['models'] = {};
+    for (const m of d.models) models[m.model] = { credits: m.credit, calls: m.request_count };
+    return { date: d.date.slice(0, 10), credits: d.usage, models };
+  });
+}
+
+/**
  * Qoder 本地快照差分（qoder_credits_history，日合计，365 天）。
- * Qoder 官网无按日消耗明细接口，本地快照差分是消耗侧唯一可靠来源；
- * 快照无按模型粒度，models 恒为空（模型排行展示空态）。
+ * 官网采集不可用时的回退源；快照无按模型粒度，models 恒为空。
  */
 export function qoderSnapshotsToPoints(snaps: QoderCreditsSnapshot[]): BoardPoint[] {
   // consumed=null（首日/账号数变动日，差分不可比）不进 points：趋势/热力图留空，

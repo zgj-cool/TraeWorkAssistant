@@ -103,6 +103,7 @@ import type {
   QoderCreditsResult,
   QoderCreditsSnapshot,
   QoderWebUsageToday,
+  QoderWebUsage,
   QoderEnvCheck,
   QoderIdeScanResult,
   QoderOauthDone,
@@ -579,8 +580,10 @@ export const api = {
     catalogSync: () => invoke<number>('buddy_ai_catalog_sync'),
     /** 积分同步（get-user-resource TotalDosage → 池快照三键回写），返回刷新后账号视图 */
     creditsFetch: () => invoke<BuddyAiAccountView[]>('buddy_ai_credits_fetch'),
-    /** 全账号官网用量聚合（积分看板「官网」源；31 天零填充，10min 缓存 + stale-on-error） */
-    usageOfficialAll: () => invoke<BuddyAiUsageOfficialAll>('buddy_ai_usage_official_all'),
+    /** 全账号官网用量聚合（积分看板「官网」源；31 天零填充，10min 缓存 + stale-on-error；
+     *  refresh=true 跳过缓存强制上游拉取——Rust 参数名为 refresh，invoke key 必须写 refresh） */
+    usageOfficialAll: (refresh?: boolean) =>
+      invoke<BuddyAiUsageOfficialAll>('buddy_ai_usage_official_all', { refresh: refresh ?? null }),
     /** 本地 Token 统计（~/.workbuddy-ai/projects 会话 jsonl 扫描；fresh=true 跳过 10min 结果缓存） */
     tokenStats: (fresh?: boolean) =>
       invoke<BuddyAiTokenStats>('buddy_ai_token_stats', { fresh: fresh ?? null }),
@@ -701,8 +704,12 @@ export const api = {
       invoke<WbResetResult[]>('workbuddy_env_reset', { items, keycloakLogout }),
     // 官方用量 + 本地 Token 统计（F-25/26/57/58，批次3）
     // 注意：Rust 端参数名为 refresh（Option<bool>），key 必须写 refresh；此前误写 fresh 被静默忽略导致「刷新」永远走缓存
-    /** 全账号官方用量聚合（近 7 日积分消耗主数据源；31 天零填充，含按模型汇总） */
-    usageOfficialAll: () => invoke<WbUsageOfficialAll>('workbuddy_usage_official_all'),
+    /** 全账号官方用量聚合（近 7 日积分消耗主数据源；31 天零填充，含按模型汇总）。
+     *  refresh=true 跳过 10min 缓存强制上游拉取（「刷新数据」按钮）；缺省走后端缓存/SWR。
+     *  注意：Rust 端参数名为 refresh（Option<bool>），key 必须写 refresh——写 fresh 会被静默
+     *  忽略导致「刷新」永远走缓存（activityInfo 曾踩过同款坑） */
+    usageOfficialAll: (refresh?: boolean) =>
+      invoke<WbUsageOfficialAll>('workbuddy_usage_official_all', { refresh: refresh ?? null }),
     usageFallback: () => invoke<WbUsageFallback>('workbuddy_usage_fallback'),
     // fresh=true 强制重扫（跳过 10 分钟结果缓存；按文件增量缓存仍生效）
     tokenStats: (fresh?: boolean) =>
@@ -788,11 +795,20 @@ export const api = {
     checkinTaskUnregister: () => invoke('qoder_checkin_task_unregister'),
     creditsFetch: (userId?: string, fresh?: boolean) =>
       invoke<QoderCreditsResult>('qoder_credits_fetch', { userId: userId ?? null, fresh: fresh ?? null }),
-    /** 官网网页会话今日积分消耗（自动读取客户端 Cookie；失败返回 ok=false） */
+    /** @deprecated 旧官网会话 cookie 通道（读 Qoder 客户端 cookie 库，实测无官网会话，恒失败）；
+     *  已由 `webCollect`（Webview 同源 fetch）取代，页面不再调用（避免无效日志） */
     webUsageToday: () => invoke<QoderWebUsageToday>('qoder_web_usage_today'),
+    /** 官网用量采集：按账号独立 Webview 登录后同源拉取（silent=true 隐藏窗口静默刷新） */
+    webCollect: (accountId?: string, silent?: boolean) =>
+      invoke<void>('qoder_web_collect_start', {
+        accountId: accountId ?? null,
+        silent: silent ?? null,
+      }),
+    /** 最近一次官网采集聚合（未采集过为 null） */
+    webUsageGet: () => invoke<QoderWebUsage | null>('qoder_web_usage_get'),
     creditsHistoryList: () =>
       invoke<{ snapshots: QoderCreditsSnapshot[] }>('qoder_credits_history_list'),
-    /** Qoder 会话明细（issue #82 问题5：官网无明细接口，数据源为网关请求级本地流水 qoder_sessions） */
+    /** Qoder 会话明细：优先官网采集行级明细（Webview 同源 fetch），未采集时回退网关本地流水 */
     usageSessions: (opts: {
       start: string;
       end: string;

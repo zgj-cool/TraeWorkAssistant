@@ -55,14 +55,18 @@ fn load_aes_key(user_data: &Path) -> Result<Vec<u8>, String> {
     dpapi_unprotect(&decoded[5..])
 }
 
-/// v10 布局：'v10' + nonce(12) + ciphertext+tag(16)；非 v10 视为明文（老布局）
+/// v10 布局：'v10' + nonce(12) + ciphertext+tag(16)。
+/// 非 v10 仅当内容是可打印 ASCII 时视为「老布局明文」——v20（Edge/Chrome 127+
+/// App-Bound Encryption）等新密文绝不能按明文本透传：既拼不出有效 Cookie 头，
+/// 又会把密文随请求错误消息泄露到日志/终端（2026-11-26 探针实测 Edge 全线 v20）。
 #[cfg(windows)]
 fn decrypt_blob(blob: &[u8], key: &[u8]) -> Option<String> {
     use aes_gcm::aead::Aead;
     use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
     if blob.len() < 19 || &blob[..3] != b"v10" {
         let plain = String::from_utf8_lossy(blob).trim().to_string();
-        return (!plain.is_empty()).then_some(plain);
+        let printable = !plain.is_empty() && plain.chars().all(|c| c.is_ascii_graphic() || c == ' ');
+        return printable.then_some(plain);
     }
     let cipher = Aes256Gcm::new_from_slice(key).ok()?;
     let nonce = Nonce::from_slice(&blob[3..15]);
@@ -108,11 +112,11 @@ fn copy_cookies_db(prof: &Path) -> Result<(PathBuf, PathBuf), String> {
     Ok((tmp_db, td))
 }
 
-/// 读取 qoder.com(.cn) 域 cookie → `Cookie` 请求头字符串（多 Profile 合并，不覆盖已取到的键）
+/// user_data 下一级含 Cookies 的目录（Chromium 多 Profile；Electron 根级 Network/Cookies
+/// 也会作为名为 "Network" 的 profile 条目命中）。read_cookie_header 与手工探针共用，
+/// 保证「读哪里」只有一个口径。
 #[cfg(windows)]
-fn read_cookie_header(user_data: &Path) -> Result<String, String> {
-    let key = load_aes_key(user_data)?;
-    let mut cookies: HashMap<String, String> = HashMap::new();
+fn profile_dirs_with_cookies(user_data: &Path) -> Result<Vec<PathBuf>, String> {
     let mut profiles: Vec<PathBuf> = std::fs::read_dir(user_data)
         .map_err(|e| format!("User Data 遍历失败: {e}"))?
         .flatten()
@@ -122,24 +126,40 @@ fn read_cookie_header(user_data: &Path) -> Result<String, String> {
         .collect();
     // Default / Profile * 优先，活跃账号通常在 Default
     profiles.sort_by_key(|p| p.file_name().and_then(|n| n.to_str()) != Some("Default"));
+    Ok(profiles)
+}
+
+/// 从临时复制的 Cookies 库读 qoder 域记录（名称 + 密文）；读库失败 → 空表
+#[cfg(windows)]
+fn read_cookie_rows(tmp_db: &Path) -> Vec<(String, Vec<u8>)> {
+    rusqlite::Connection::open_with_flags(tmp_db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .and_then(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT name, encrypted_value FROM cookies WHERE host_key LIKE '%qoder.com%' OR host_key LIKE '%qoder.cn%' ORDER BY length(path) DESC",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+            })?;
+            let mut out = Vec::new();
+            for r in rows.flatten() {
+                out.push(r);
+            }
+            Ok(out)
+        })
+        .unwrap_or_default()
+}
+
+/// 读取 qoder.com(.cn) 域 cookie → `Cookie` 请求头字符串（多 Profile 合并，不覆盖已取到的键）
+#[cfg(windows)]
+fn read_cookie_header(user_data: &Path) -> Result<String, String> {
+    let key = load_aes_key(user_data)?;
+    let mut cookies: HashMap<String, String> = HashMap::new();
+    let profiles = profile_dirs_with_cookies(user_data)?;
     for prof in &profiles {
         let Ok((tmp_db, td)) = copy_cookies_db(prof) else { continue };
-        let rows = rusqlite::Connection::open_with_flags(&tmp_db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-            .and_then(|conn| {
-                let mut stmt = conn.prepare(
-                    "SELECT name, encrypted_value FROM cookies WHERE host_key LIKE '%qoder.com%' OR host_key LIKE '%qoder.cn%' ORDER BY length(path) DESC",
-                )?;
-                let rows = stmt.query_map([], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
-                })?;
-                let mut out = Vec::new();
-                for r in rows.flatten() {
-                    out.push(r);
-                }
-                Ok(out)
-            });
+        let rows = read_cookie_rows(&tmp_db);
         let _ = std::fs::remove_dir_all(&td);
-        for (name, enc) in rows.unwrap_or_default() {
+        for (name, enc) in rows {
             if ANALYTICS_PREFIXES.iter().any(|p| name.starts_with(p)) {
                 continue;
             }
@@ -351,5 +371,173 @@ mod tests {
         assert_eq!(num_f64(Some(&json!(12.5))), Some(12.5));
         assert_eq!(num_f64(Some(&json!("3.25"))), Some(3.25));
         assert_eq!(num_f64(Some(&json!("x"))), None);
+    }
+
+    /// v20（App-Bound）密不得按明文本透传；老布局可打印明文保留
+    #[cfg(windows)]
+    #[test]
+    fn decrypt_blob_rejects_app_bound_ciphertext() {
+        let key = [0u8; 32];
+        assert_eq!(
+            decrypt_blob(b"v20\x01\x02\x03\x04\x05\xff\xfe\x00garbage", &key),
+            None
+        );
+        assert_eq!(decrypt_blob(b"plain-value", &key), Some("plain-value".to_string()));
+        assert_eq!(decrypt_blob(b"", &key), None);
+    }
+}
+
+/// 手工探针（`cargo test probe_qoder_web_usage_cookie -- --ignored --nocapture`）：
+/// 逐来源报告「能否读到 cookie / 读不到的原因 / 读到的 cookie 名称」，发现会话类 cookie
+/// 时调一次 histories 并只打印响应键名与条数——**绝不输出 cookie 值与字段值**。
+/// 用途：验证官网明细通道是否可行（多账号需每个账号各一份官网会话）。
+#[cfg(all(test, windows))]
+mod probe_cookie {
+    use super::*;
+
+    fn sources() -> Vec<(String, PathBuf)> {
+        let mut out = Vec::new();
+        let appdata = std::env::var("APPDATA").unwrap_or_default();
+        let local = std::env::var("LOCALAPPDATA").unwrap_or_default();
+        let work = PathBuf::from(&appdata).join("com.qodercn.app.stable");
+        if work.exists() {
+            out.push(("QoderWork-current".into(), work));
+        }
+        let slots = PathBuf::from(&appdata)
+            .join("AIWorkAssistant")
+            .join("data")
+            .join("profiles_qoder_work");
+        if let Ok(rd) = std::fs::read_dir(&slots) {
+            for e in rd.flatten() {
+                if e.path().is_dir() {
+                    out.push((format!("work-slot:{}", e.file_name().to_string_lossy()), e.path()));
+                }
+            }
+        }
+        for (name, p) in [
+            ("edge", PathBuf::from(&local).join("Microsoft").join("Edge").join("User Data")),
+            ("chrome", PathBuf::from(&local).join("Google").join("Chrome").join("User Data")),
+        ] {
+            if p.exists() {
+                out.push((name.into(), p));
+            }
+        }
+        if let Ok(extra) = std::env::var("QODER_PROBE_USER_DATA") {
+            if !extra.is_empty() {
+                out.push(("env".into(), PathBuf::from(extra)));
+            }
+        }
+        out
+    }
+
+    fn probe_source(name: &str, user_data: &Path) {
+        println!("[probe] ===== {name}: {}", user_data.display());
+        let key = match load_aes_key(user_data) {
+            Ok(k) => k,
+            Err(e) => {
+                println!("[probe]   Local State/密钥不可用: {e}");
+                return;
+            }
+        };
+        let profiles = match profile_dirs_with_cookies(user_data) {
+            Ok(p) => p,
+            Err(e) => {
+                println!("[probe]   遍历失败: {e}");
+                return;
+            }
+        };
+        if profiles.is_empty() {
+            println!("[probe]   无含 Cookies 的 profile 目录");
+            return;
+        }
+        let mut header: Option<String> = None;
+        for prof in profiles {
+            let label = prof.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+            let (tmp_db, td) = match copy_cookies_db(&prof) {
+                Ok(v) => v,
+                Err(e) => {
+                    println!("[probe]   {label}: Cookies 复制失败 -> {e}");
+                    continue;
+                }
+            };
+            let rows = read_cookie_rows(&tmp_db);
+            let _ = std::fs::remove_dir_all(&td);
+            let mut names = Vec::new();
+            let mut decrypted = 0usize;
+            for (n, enc) in &rows {
+                names.push(n.clone());
+                if decrypt_blob(enc, &key).is_some() {
+                    decrypted += 1;
+                }
+            }
+            println!(
+                "[probe]   {label}: qoder 域记录 {} 条，解密成功 {decrypted}；名称 {names:?}",
+                rows.len()
+            );
+            if header.is_none() && names.iter().any(|n| n.contains("session")) {
+                // 复用生产读取器生成请求头（值不外泄）
+                match read_cookie_header(user_data) {
+                    Ok(h) => header = Some(h),
+                    Err(e) => println!("[probe]   会话 cookie 未能组装: {e}"),
+                }
+            }
+        }
+        let Some(h) = header else {
+            println!("[probe]   未发现会话类 cookie（session*），不调用 histories");
+            return;
+        };
+        println!("[probe]   调用 histories（近 7 天，page_size=5）…");
+        println!("[probe]   {}", call_histories(&h));
+    }
+
+    fn call_histories(cookie: &str) -> Value {
+        let now = chrono::Local::now();
+        let end = now.timestamp_millis();
+        let start = (now - chrono::Duration::days(7)).timestamp_millis();
+        let url = format!(
+            "https://qoder.com.cn{HISTORIES_PATH}?page=1&page_size=5&start_time={start}&end_time={end}&order_by=begin_at&order=-1"
+        );
+        let agent = ureq::AgentBuilder::new()
+            .timeout(std::time::Duration::from_secs(20))
+            .build();
+        let resp = agent
+            .get(&url)
+            .set("Cookie", cookie)
+            .set("Origin", "https://qoder.com.cn")
+            .set("Referer", "https://qoder.com.cn/account/usage")
+            .set("X-Requested-With", "XMLHttpRequest")
+            .set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36")
+            .call();
+        let summarize = |body: Value| {
+            json!({
+                "top_keys": body.as_object().map(|m| m.keys().cloned().collect::<Vec<_>>()),
+                "data_len": body.get("data").and_then(Value::as_array).map(|a| a.len()),
+                "record_keys": body
+                    .get("data")
+                    .and_then(Value::as_array)
+                    .and_then(|a| a.first())
+                    .and_then(Value::as_object)
+                    .map(|m| m.keys().cloned().collect::<Vec<_>>()),
+                "page_result_keys": body
+                    .get("page_result")
+                    .and_then(Value::as_object)
+                    .map(|m| m.keys().cloned().collect::<Vec<_>>()),
+            })
+        };
+        match resp {
+            Ok(r) => json!({ "status": 200, "shape": summarize(r.into_json().unwrap_or_default()) }),
+            Err(ureq::Error::Status(code, r)) => {
+                json!({ "status": code, "shape": summarize(r.into_json().unwrap_or_default()) })
+            }
+            Err(e) => json!({ "error": e.to_string() }),
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn probe_qoder_web_usage_cookie() {
+        for (name, dir) in sources() {
+            probe_source(&name, &dir);
+        }
     }
 }

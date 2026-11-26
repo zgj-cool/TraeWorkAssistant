@@ -35,8 +35,10 @@
 
 use std::collections::VecDeque;
 use std::io::Read;
+use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::api_server::wb_upstream::{lines_with_first_byte_timeout, InterruptibleLines};
@@ -358,6 +360,50 @@ fn read_state() -> CatalogState {
     }
 }
 
+/// 目录落盘键（kv；与 wb_catalog / buddy_ai_model_catalog 同库不同键）
+pub const QODER_CATALOG_KEY: &str = "qoder_model_catalog";
+
+/// 落盘信封：两地区远程目录各自独立（空区 = 该区尚未同步，读取后仍回落兜底表）
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct PersistedCatalog {
+    #[serde(default)]
+    global: Vec<Value>,
+    #[serde(default)]
+    cn: Vec<Value>,
+}
+
+/// 启动加载落盘目录（幂等）：只填内存尚空的地区，不覆盖本进程已采纳的新数据。
+/// 目录此前只存进程内存，重启即回落静态兜底表（新上架模型缺失、倍率回旧快照），
+/// 与客户端 IDE 显示的模型/倍率长期漂移；落盘后重启即恢复上次同步结果。
+pub fn load_persisted(data_dir: &Path) {
+    let file: PersistedCatalog = crate::store::db(data_dir).kv_get(QODER_CATALOG_KEY);
+    if file.global.is_empty() && file.cn.is_empty() {
+        return;
+    }
+    let apply = |state: &mut CatalogState| {
+        if state.global.is_empty() {
+            state.global = file.global;
+        }
+        if state.cn.is_empty() {
+            state.cn = file.cn;
+        }
+    };
+    match catalog().write() {
+        Ok(mut guard) => apply(&mut guard),
+        Err(poisoned) => apply(&mut poisoned.into_inner()),
+    }
+}
+
+/// 落盘当前目录（采纳成功后调用；失败由调用方记日志，不影响同步结果）
+pub fn save_persisted(data_dir: &Path) -> Result<(), String> {
+    let state = read_state();
+    let file = PersistedCatalog {
+        global: state.global,
+        cn: state.cn,
+    };
+    crate::store::db(data_dir).kv_set(QODER_CATALOG_KEY, &file)
+}
+
 // ── 测试专用（cfg(test)）：目录状态互斥与复位 ──
 // 目录是进程级单例，而 catalog_for 在远程目录非空时完全替换静态兜底——
 // 并行测试中一方 adopt_remote 注入微型目录，会让另一方依赖兜底表的断言
@@ -451,9 +497,18 @@ pub fn adopt_remote(region: QoderRegion, payload: &Value) -> Result<usize, Strin
 #[allow(dead_code)] // p3-3-wire（unified_catalog）消费
 pub fn list() -> Vec<Value> {
     let state = read_state();
+    // 区序：仅「有远程目录」的区优先。Global 区远程从未同步（qoder_catalog::run_task
+    // 只拉 CN），catalog_for 对空区回落静态兜底表——固定 global 优先会让同名模型
+    // 恒取 Global 兜底快照，CN 每日同步的实时倍率被静默丢弃（展示与 resolve 分叉）。
+    // 两区都空（或都有远程）时保持原序 global 优先。
+    let regions = if !state.global.is_empty() || state.cn.is_empty() {
+        [QoderRegion::Global, QoderRegion::Cn]
+    } else {
+        [QoderRegion::Cn, QoderRegion::Global]
+    };
     let mut out: Vec<Value> = Vec::new();
     let mut seen: Vec<String> = Vec::new();
-    for region in [QoderRegion::Global, QoderRegion::Cn] {
+    for region in regions {
         for model in catalog_for(&state, region) {
             let id = text_of(&model, "id");
             if id.is_empty() {
@@ -3198,6 +3253,63 @@ mod tests {
         assert_eq!(flash[0]["config"]["key"], "qfmodel");
         assert_eq!(flash[0]["maxOutputTokens"], MAX_OUTPUT_TOKENS);
         assert_eq!(flash[0]["supportsToolCall"], true);
+    }
+
+    /// 区序回归：Global 无远程目录（从未同步）、CN 有远程时，同名模型必须取 CN
+    /// 实时值——此前固定 global 优先 + Global 空区回落静态兜底表，CN 每日同步的
+    /// 倍率/名称被静默丢弃（展示与 resolve 口径分叉）
+    #[test]
+    fn list_prefers_region_with_remote_catalog() {
+        let _catalog = catalog_test_guard();
+        let payload = json!({
+            "statusCodeValue": 200,
+            "chat": [
+                {"key": "qfmodel", "display_name": "Qwen3.8-Flash", "enable": true, "price_factor": 0.31},
+                {"key": "hungerg", "display_name": "HungerG", "enable": true, "price_factor": 0}
+            ],
+        });
+        adopt_remote(QoderRegion::Cn, &payload).expect("合法信封必须被采纳");
+        let items = list();
+        let flash = items
+            .iter()
+            .find(|m| m["id"] == "Qwen3.8-Flash")
+            .expect("Qwen3.8-Flash 应在并集");
+        assert_eq!(
+            flash["credits"], "x0.31 credits",
+            "同名模型须取 CN 远程实时倍率，不得被 Global 兜底快照覆盖"
+        );
+        assert_eq!(flash["region"], "cn");
+        let hunger = items
+            .iter()
+            .find(|m| m["id"] == "HungerG")
+            .expect("远程新模型应入目录");
+        assert_eq!(hunger["credits"], "x0 credits", "免费档倍率 0 不得丢键");
+    }
+
+    /// 目录持久化：save → 内存复位 → load 恢复（重启不回落静态兜底表）
+    #[test]
+    fn persisted_catalog_survives_restart() {
+        let _catalog = catalog_test_guard();
+        let dir = std::env::temp_dir().join(format!(
+            "aiwork_qoder_catalog_persist_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("建临时目录");
+        let payload = json!({
+            "chat": [{"key": "hungerg", "display_name": "HungerG", "enable": true, "price_factor": 0}],
+        });
+        adopt_remote(QoderRegion::Cn, &payload).expect("合法信封必须被采纳");
+        save_persisted(&dir).expect("落盘");
+        catalog_test_reset();
+        assert!(
+            resolve("HungerG", QoderRegion::Cn).is_none(),
+            "复位后应回落兜底表（底表无 HungerG）"
+        );
+        load_persisted(&dir);
+        let m = resolve("HungerG", QoderRegion::Cn).expect("重启加载后应恢复远程目录");
+        assert_eq!(text_of(&m, "upstreamKey"), "hungerg");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

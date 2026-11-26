@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
-import { RefreshCw } from 'lucide-react';
+import { Globe, RefreshCw } from 'lucide-react';
 import PageHeader from '../../components/PageHeader';
-import { Badge, SegmentedTabs } from '../../components/ui';
+import { Badge, SegmentedTabs, Spinner, StatCard } from '../../components/ui';
 import { MultiSelectDropdown } from '../../components/MultiSelectDropdown';
 import { SOURCE_LABELS, SOURCES, type BoardSource } from '../../components/ChartFilterBar';
 import { api } from '../../lib/tauri';
@@ -11,9 +11,11 @@ import { withMinDelay } from '../../lib/delay';
 import { fmtCredits, dateStrToEndTs } from '../../lib/format';
 import KpiRow, { type PlatformKpi, type PlatformScope } from './KpiRow';
 // D2/D3（审查修复清单 v1.4.9）：KPI「今日新增」按账号筛选推导
-import { qoderEarnedByDateFiltered, traeEarnedByDateFiltered, wbEarnedByDateFiltered } from './adapters';
+import { aggregateQoderWebAccounts, qoderEarnedByDateFiltered, traeEarnedByDateFiltered, wbEarnedByDateFiltered } from './adapters';
+import { syncQoderWebAccounts } from '../../lib/qoderWebSync';
 import ExpiryTab from './ExpiryTab';
 import CreditsTab from './CreditsTab';
+import QoderWebCollectDialog from './QoderWebCollectDialog';
 import TokensTab, { type GatewayDays } from './TokensTab';
 import SessionsTab from './SessionsTab';
 import type {
@@ -22,6 +24,7 @@ import type {
   QoderCheckinRecord,
   QoderCreditsResult,
   QoderCreditsSnapshot,
+  QoderWebUsage,
   TraeExpiredEntsResult,
   UnifiedModel,
   UsageDayView,
@@ -94,6 +97,12 @@ export default function CreditsDashboard({ platform }: { platform: 'trae' | 'bud
   const [qoderCredits, setQoderCredits] = useState<QoderCreditsResult | null>(null);
   const [qoderSnapshots, setQoderSnapshots] = useState<QoderCreditsSnapshot[]>([]);
   const [qoderCheckin, setQoderCheckin] = useState<QoderCheckinRecord[]>([]);
+  // Qoder 官网采集聚合（Webview 同源 fetch；null = 未采集过）；collectingId = 正在采集的账号
+  const [qoderWeb, setQoderWeb] = useState<QoderWebUsage | null>(null);
+  const [collectingId, setCollectingId] = useState<string | null>(null);
+  const [collectOpen, setCollectOpen] = useState(false);
+  // 静默刷新桥：refresh 定义在采集逻辑之前，经 ref 调用最新实现
+  const syncOfficialRef = useRef<() => Promise<number>>(async () => 0);
   // 各统计 Tab 独立数据源状态（§3.4）；默认源按平台选择（Trae/Buddy 官网优先；
   // Qoder 官网无消耗明细 → API 网关积分测量为权威消耗口径，本地快照降为回退源；
   // Qoder Token 同样仅网关源有实测数据 → 默认网关）
@@ -210,6 +219,16 @@ export default function CreditsDashboard({ platform }: { platform: 'trae' | 'bud
     [platform, wbCredits, qoderCredits, accounts, filterByUid],
   );
   const filtersActive = groupFilter.length > 0 || accountFilter.length > 0;
+  // 官网采集按当前账号筛选重算（无筛选 = 全池已采集汇总；筛选后无已采集账号 = null 回退网关/快照）
+  const qoderWebScoped = useMemo(
+    () => aggregateQoderWebAccounts(qoderWeb, visibleUids),
+    [qoderWeb, visibleUids],
+  );
+  const qoderCollected = useMemo(() => {
+    const m = new Map<string, NonNullable<QoderWebUsage['accounts']>[number]>();
+    for (const a of qoderWeb?.accounts ?? []) m.set(a.account_id, a);
+    return m;
+  }, [qoderWeb]);
 
   // Token 统计 Tab 数据（懒加载：首次切到 Token Tab 才拉取，§3.4 lazy 触发）
   const [tokenStats, setTokenStats] = useState<WbTokenStats | null>(null);
@@ -273,9 +292,11 @@ export default function CreditsDashboard({ platform }: { platform: 'trae' | 'bud
           .checkinResults(90)
           .then(setWbCheckin)
           .catch(() => setWbCheckin([])),
-        // 官网用量聚合（31 天零填充；今日消耗 + 积分统计官网源）
+        // 官网用量聚合（31 天零填充；今日消耗 + 积分统计官网源）。
+        // fresh=true（「刷新数据」）强制上游拉取：此前本命令恒 force=false，已用积分
+        // 要等 10min 缓存过期 + 后台 SWR 完成后再刷一次才变，用户感知为「延迟几分钟才同步」
         api.workbuddy
-          .usageOfficialAll()
+          .usageOfficialAll(fresh)
           .then(setWbOfficial)
           .catch(() => setWbOfficial(null)),
         // 快照差分回退（365 天；本地源 + 官网失败回退）
@@ -325,6 +346,11 @@ export default function CreditsDashboard({ platform }: { platform: 'trae' | 'bud
           .checkinResults(90)
           .then(setQoderCheckin)
           .catch(() => setQoderCheckin([])),
+        // 官网采集聚合（Webview 同源 fetch 落地；纯读本地缓存零网络，未采集过为 null）
+        api.qoder
+          .webUsageGet()
+          .then(setQoderWeb)
+          .catch(() => {}),
       ]);
       return ok;
     },
@@ -405,6 +431,12 @@ export default function CreditsDashboard({ platform }: { platform: 'trae' | 'bud
       // 避免「已刷新」与失败提示并存造成语义矛盾
       let ok = true;
       const work = async (): Promise<boolean> => {
+        // Qoder 官网静默同步（仅「刷新数据」触发；调度器静默同步不触发）：
+        // 已保存登录态的账号用隐藏窗口重采，无需用户重新登录
+        if (isQoder && fresh && (qoderWeb?.accounts?.length ?? 0) > 0) {
+          pushToast('info', `正在后台同步官网用量（${qoderWeb?.accounts?.length ?? 0} 个账号）…`);
+          await syncOfficialRef.current();
+        }
         // Trae fresh 时先串行刷新剩余积分：后端逐账号网络查询并落盘 credits_daily.json 快照
         // （旧页即串行保证此顺序），完成后再并行读取；否则日快照竞速先返回旧值，今日 KPI 滞后
         if (isTrae && fresh) ok = (await refreshRemainingCredits()) && ok;
@@ -441,6 +473,11 @@ export default function CreditsDashboard({ platform }: { platform: 'trae' | 'bud
         setSessionsRefreshKey((k) => k + 1);
         return ok;
       };
+      // Buddy 页「刷新数据」会强制重拉官网用量（全量 7 账号×31 天分页，20-53s），
+      // 先给预期提示，避免用户误以为卡住（issue #188 感知同类）
+      if (fresh && !silent && platform === 'buddy') {
+        pushToast('info', '已用积分正从官网重拉（全量聚合需数十秒）…');
+      }
       try {
         const allOk = silent ? await work() : await withMinDelay(work(), 600);
         if (fresh && allOk) {
@@ -450,7 +487,7 @@ export default function CreditsDashboard({ platform }: { platform: 'trae' | 'bud
         if (!silent) setLoading(false);
       }
     },
-    [isTrae, isQoder, refreshRemainingCredits, refreshCreditsDaily, refreshCreditsHistory, loadUsage, loadExpiredEnts, loadBuddy, loadQoder, loadTokens, loadGateway, pushToast],
+    [isTrae, isQoder, platform, qoderWeb, refreshRemainingCredits, refreshCreditsDaily, refreshCreditsHistory, loadUsage, loadExpiredEnts, loadBuddy, loadQoder, loadTokens, loadGateway, pushToast],
   );
 
   // refresh 引用最新闭包（依赖链深，listen effect 只随 platform 注册一次，
@@ -471,6 +508,31 @@ export default function CreditsDashboard({ platform }: { platform: 'trae' | 'bud
     if (isTrae) void loadExpiredEnts();
   }, [isTrae, loadExpiredEnts]);
 
+  // 已用积分 SWR 补取：后端缓存过期时先回旧值并转后台全量刷新（refreshing=true），
+  // 这里延迟重取——单轮全量拉取（7 账号×31 天分页）20-53s，间隔 10s/20s/30s 递增覆盖慢网络；
+  // 命中新缓存（refreshing 消失）即停。stale-on-error（刷新失败回退）不轮询，避免死循环。
+  const officialPollRef = useRef(0);
+  useEffect(() => {
+    if (!wbOfficial?.refreshing) {
+      officialPollRef.current = 0;
+      return;
+    }
+    if (officialPollRef.current >= 3) {
+      // 轮询用尽仍未拿到新值（后台轮可能被 300s 节流挡掉）：本地清掉 refreshing，
+      // 避免顶部徽标常驻假象；下次手动刷新/重进页面仍会重新判定
+      setWbOfficial((v) => (v?.refreshing ? { ...v, refreshing: false } : v));
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      officialPollRef.current += 1;
+      api.workbuddy
+        .usageOfficialAll()
+        .then(setWbOfficial)
+        .catch(() => {});
+    }, 10_000 * (officialPollRef.current + 1));
+    return () => window.clearTimeout(timer);
+  }, [wbOfficial]);
+
   // 调度器看板数据同步成功后联动重读缓存（issue #61：页面常驻时数据不再滞后）；
   // payload.platform 与本视图平台匹配才刷新，静默走 refresh(false, true)（纯读缓存、零网络、无 loading 闪烁）
   useEffect(() => {
@@ -487,6 +549,98 @@ export default function CreditsDashboard({ platform }: { platform: 'trae' | 'bud
       unlisten?.();
     };
   }, [platform]);
+
+  // Qoder 官网采集（Webview 同源 fetch）：按账号独立数据目录登录，结果按账号归档
+  const startCollect = useCallback(
+    async (accountId: string) => {
+      setCollectingId(accountId);
+      setCollectOpen(false);
+      try {
+        await api.qoder.webCollect(accountId, false);
+        pushToast('info', '已打开采集窗口：请登录该账号（独立目录），登录后自动获取并关闭');
+      } catch (err) {
+        pushToast('error', `官网采集启动失败：${String(err)}`);
+      } finally {
+        setCollectingId(null);
+      }
+    },
+    [pushToast],
+  );
+  // 已采集账号逐个静默刷新（与总览页共用 lib/qoderWebSync，登录态已持久化无需重登）
+  const syncOfficial = useCallback(async (): Promise<number> => {
+    const collected = qoderWeb?.accounts ?? [];
+    if (!isQoder || collected.length === 0) return 0;
+    setCollectingId(collected[0].account_id);
+    try {
+      const r = await syncQoderWebAccounts(collected);
+      if (r.ok > 0) {
+        pushToast('success', `官网用量已同步 ${r.ok}/${r.total} 个账号`);
+      }
+      if (r.failed.length > 0) {
+        pushToast(
+          'warn',
+          `${r.failed.length} 个账号同步失败，请点「官网采集」重新登录：${r.failed.map((f) => f.name).join('、')}`,
+        );
+      }
+      return r.ok;
+    } finally {
+      setCollectingId(null);
+    }
+  }, [isQoder, qoderWeb, pushToast]);
+  useEffect(() => {
+    syncOfficialRef.current = syncOfficial;
+  }, [syncOfficial]);
+  // 入口：已筛选单账号/池内仅一个账号时直采，否则弹账号选择
+  const openCollect = useCallback(() => {
+    const pool = qoderCredits?.accounts ?? [];
+    if (pool.length === 0) {
+      pushToast('warn', 'Qoder 池暂无账号，请先在账号管理导入');
+      return;
+    }
+    if (accountFilter.length === 1) {
+      void startCollect(accountFilter[0]);
+      return;
+    }
+    if (pool.length === 1) {
+      void startCollect(pool[0].user_id);
+      return;
+    }
+    setCollectOpen(true);
+  }, [qoderCredits, accountFilter, startCollect, pushToast]);
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    listen<{ ok: boolean; silent?: boolean; account_id?: string; account_name?: string; records_total?: number; message?: string }>(
+      'qoder-web-collect-done',
+      (e) => {
+        setCollectingId(null);
+        // 静默刷新由 syncOfficial 汇总提示，避免逐账号刷屏
+        if (!e.payload.silent) {
+          if (e.payload.ok) {
+            const who = e.payload.account_name ? `账号「${e.payload.account_name}」` : 'Qoder';
+            pushToast('success', `${who}官网用量已采集（${e.payload.records_total ?? 0} 条）`);
+          } else {
+            pushToast('warn', e.payload.message ?? 'Qoder 官网采集未完成');
+          }
+        }
+        // 无论成败都重读聚合（失败时保留旧桶，仅刷新视图）
+        api.qoder.webUsageGet().then(setQoderWeb).catch(() => {});
+      },
+    ).then((fn) => {
+      if (cancelled) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [pushToast]);
+
+  // Qoder 官网采集首次就绪时自动切到「官网」源（用户手动切过源则不再干预）
+  const sourceTouchedRef = useRef(false);
+  useEffect(() => {
+    if (isQoder && qoderWeb && !sourceTouchedRef.current) setCreditsSource('official');
+  }, [isQoder, qoderWeb]);
 
   const today = localDate(new Date());
 
@@ -666,16 +820,20 @@ export default function CreditsDashboard({ platform }: { platform: 'trae' | 'bud
             .reduce((s, a) => s + a.credits, 0)
         : gwDay.credits
       : null;
+    // 今日消耗：官网采集（官方接口，口径最准）> API 网关实测 > 本地快照差分。
+    // 官网采集已按当前账号筛选重算（无筛选 = 全池已采集账号汇总）
+    const webConsumed = qoderWebScoped?.summary.usage_today ?? null;
     return {
       accounts: accs.length,
       totalCredits,
       packages,
       todayEarned,
-      // 网关无当日条目时回退快照差分；差分为 null（不可比日）→ KPI 显示「—」
-      todayConsumed: gwConsumed != null ? gwConsumed : (todaySnap?.consumed ?? null),
+      // 官网采集无值/未采集 → 网关；网关无当日条目 → 快照差分（null = 不可比 → KPI 显示「—」）
+      todayConsumed:
+        webConsumed ?? (gwConsumed != null ? gwConsumed : (todaySnap?.consumed ?? null)),
       expiring7d: expiring,
     };
-  }, [visibleQoderCredits, qoderSnapshots, qoderCheckin, visibleUids, today, gateway]);
+  }, [visibleQoderCredits, qoderSnapshots, qoderCheckin, qoderWebScoped, visibleUids, today, gateway]);
 
   const kpi = isTrae ? traeKpi : isQoder ? qoderKpi : buddyKpi;
 
@@ -695,6 +853,8 @@ export default function CreditsDashboard({ platform }: { platform: 'trae' | 'bud
   const qoderTodaySnap = qoderSnapshots.find((s) => s.date === today);
   // Qoder 网关当日条目（消耗统计权威口径；存在即优先于快照差分）
   const qoderGatewayToday = gateway?.qoder?.find((d) => d.date === today) ?? null;
+  // Qoder 官网采集当日值（已按当前账号筛选重算）
+  const qoderWebToday = qoderWebScoped?.summary.usage_today ?? null;
   const qoderLastSnapDate = qoderSnapshots.reduce<string | null>((acc, s) => (!acc || s.date > acc ? s.date : acc), null);
   const earnedHint = isTrae
     ? filtersActive && traeFilteredEarned && traeFilteredEarned.skippedDates > 0
@@ -715,17 +875,18 @@ export default function CreditsDashboard({ platform }: { platform: 'trae' | 'bud
   const consumedHint = isTrae
     ? undefined
     : isQoder
-      ? // Qoder 消耗统计口径：网关实测积分优先（仅覆盖走网关流量），
-        // 网关无当日条目时回退快照差分——两种口径分别标注
-        qoderGatewayToday
-        ? 'API 网关实测积分 · 仅覆盖走网关流量'
-        : qoderTodaySnap?.consumed != null
-          ? '快照差分推导 · 网关无当日记录'
-          : qoderTodaySnap
-            ? '账号数变动 · 当日差分不可比'
-            : qoderLastSnapDate
-              ? `快照差分推导（截至 ${qoderLastSnapDate}）`
-              : '暂无快照 · 待首次积分查询落库'
+      ? // Qoder 消耗统计口径优先级：官网采集 > 网关实测（仅覆盖走网关流量）> 快照差分
+        qoderWebToday != null
+        ? `官网采集 · 已采集 ${qoderWebScoped?.accounts_total ?? 0}/${qoderCredits?.accounts.length ?? 0} 账号`
+        : qoderGatewayToday
+          ? 'API 网关实测积分 · 仅覆盖走网关流量'
+          : qoderTodaySnap?.consumed != null
+            ? '快照差分推导 · 网关无当日记录'
+            : qoderTodaySnap
+              ? '账号数变动 · 当日差分不可比'
+              : qoderLastSnapDate
+                ? `快照差分推导（截至 ${qoderLastSnapDate}）`
+                : '暂无快照 · 待首次积分查询落库'
       : wbOfficial
         ? wbOfficial.stale
           ? '缓存回退 · 非当日数据'
@@ -765,7 +926,10 @@ export default function CreditsDashboard({ platform }: { platform: 'trae' | 'bud
           : { official: 'Buddy 官网未提供按日 token 明细接口' }
       : isQoder
         ? {
-            official: 'Qoder 官网未提供按日消耗明细接口',
+            // 官网源需先采集：未采集时禁用并引导，有采集数据则开放
+            ...(qoderWeb
+              ? {}
+              : { official: 'Qoder 官网明细需先点「官网采集」，登录后自动拉取近 31 天' }),
             ...(qoderGatewayReady
               ? {}
               : { gateway: 'Qoder 网关未启用（在 API 服务页启用 Qoder 池并将客户端指向本地网关后点亮）' }),
@@ -774,6 +938,8 @@ export default function CreditsDashboard({ platform }: { platform: 'trae' | 'bud
           ? { local: '本地源 = WB 客户端会话快照差分，Trae 无本地源' }
           : {};
   const handleSourceChange = (s: BoardSource) => {
+    // 用户手动切过源后，不再被「官网采集就绪自动切源」覆盖
+    sourceTouchedRef.current = true;
     if (tab === 'credits') setCreditsSource(s);
     else setTokensSource(s);
   };
@@ -795,7 +961,62 @@ export default function CreditsDashboard({ platform }: { platform: 'trae' | 'bud
         />
       </div>
 
-      {/* 第一层分类：Tab 切换（左）+ 刷新（右） */}
+      {/* Qoder 官网采集结果（Webview 同源 fetch；仅 Qoder 页且有采集数据时展示） */}
+      {isQoder && qoderWeb && (
+        <div className="mb-4 card p-4">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm font-semibold">Qoder 官网用量</span>
+              <Badge tone="green">官方接口</Badge>
+              <span className="text-[11px] text-slate-400">
+                已采集 {qoderWeb.accounts_total ?? 0}/{qoderCredits?.accounts.length ?? 0} 账号 ·{' '}
+                {qoderWeb.range_start} ~ {qoderWeb.range_end} · {qoderWeb.records_total} 条
+              </span>
+            </div>
+            <span className="text-[11px] text-slate-400">
+              名义消耗（original_credits）· 实际扣费 {fmtCredits(qoderWeb.billed_total)}
+            </span>
+          </div>
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+            <StatCard label="今日已用（官网）" value={fmtCredits(qoderWeb.summary.usage_today)} tone="cyan" />
+            <StatCard label="近 7 天（官网）" value={fmtCredits(qoderWeb.summary.usage_7days)} tone="slate" />
+            <StatCard label="本月（官网）" value={fmtCredits(qoderWeb.summary.usage_this_month)} tone="slate" />
+            <StatCard
+              label="Top 模型"
+              value={qoderWeb.models[0]?.model ?? '—'}
+              hint={
+                qoderWeb.models[0]
+                  ? `${fmtCredits(qoderWeb.models[0].credit)} 积分 / ${qoderWeb.models[0].request_count} 次`
+                  : '暂无模型数据'
+              }
+              tone="violet"
+            />
+          </div>
+          {(qoderWeb.accounts?.length ?? 0) > 0 && (
+            <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3 dark:border-zinc-800">
+              <span className="text-[11px] text-slate-400">逐账号：</span>
+              {(qoderWeb.accounts ?? []).map((a) => (
+                <button
+                  key={a.account_id}
+                  className="flex items-center gap-1.5 rounded-full border border-slate-200 px-2.5 py-1 text-[11px] text-slate-600 hover:border-emerald-400 dark:border-zinc-700 dark:text-zinc-300"
+                  title={`${a.range_start} ~ ${a.range_end} · ${a.records_total} 条 · 采集于 ${new Date(a.fetched_at_ms).toLocaleString('zh-CN', { hour12: false })}`}
+                  onClick={() => void startCollect(a.account_id)}
+                  disabled={collectingId != null}
+                >
+                  <span className={a.verified ? 'text-emerald-500' : 'text-amber-500'}>
+                    {a.verified ? '✓' : '!'}
+                  </span>
+                  <span className="max-w-[9rem] truncate">{a.account_name || a.account_id}</span>
+                  <span className="text-slate-400">今日 {fmtCredits(a.summary.usage_today)}</span>
+                </button>
+              ))}
+              <button className="btn-outline text-[11px]" onClick={openCollect} disabled={collectingId != null}>
+                <Globe size={12} /> 采集其他账号
+              </button>
+            </div>
+          )}
+        </div>
+      )}
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <SegmentedTabs
           value={tab}
@@ -842,6 +1063,17 @@ export default function CreditsDashboard({ platform }: { platform: 'trae' | 'bud
               顶部筛选仅收窄账号候选，会话结果按页内筛选过滤
             </Badge>
           )}
+          {platform === 'buddy' && wbOfficial?.refreshing && (
+            <Badge tone="blue" title="后端缓存已过期，正在后台重拉官网用量（全量聚合需数十秒），完成后自动更新">
+              <Spinner className="mr-1 h-3 w-3" /> 已用积分刷新中
+            </Badge>
+          )}
+          {isQoder && (
+            <button className="btn-outline" onClick={openCollect} disabled={collectingId != null}>
+              <Globe size={15} className={collectingId ? 'animate-pulse' : ''} />{' '}
+              {collectingId ? '等待登录/采集…' : '官网采集'}
+            </button>
+          )}
           <button className="btn-outline" onClick={() => void refresh(true)} disabled={loading}>
             <RefreshCw size={15} className={loading ? 'animate-spin' : ''} /> 刷新数据
           </button>
@@ -884,6 +1116,7 @@ export default function CreditsDashboard({ platform }: { platform: 'trae' | 'bud
           wbCheckin={wbCheckin}
           qoderSnapshots={qoderSnapshots}
           qoderCheckin={qoderCheckin}
+          qoderWeb={qoderWebScoped}
           gateway={gateway}
           uidSet={visibleUids}
         />
@@ -896,6 +1129,16 @@ export default function CreditsDashboard({ platform }: { platform: 'trae' | 'bud
           gateway={gateway}
         />
       )}
+
+      {/* 多账号采集账号选择（每个账号独立 Webview 数据目录） */}
+      <QoderWebCollectDialog
+        open={collectOpen}
+        targets={(qoderCredits?.accounts ?? []).map((a) => ({ id: a.user_id, name: a.name || a.user_id }))}
+        collected={qoderCollected}
+        collectingId={collectingId}
+        onClose={() => setCollectOpen(false)}
+        onPick={(id) => void startCollect(id)}
+      />
     </div>
   );
 }

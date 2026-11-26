@@ -3,11 +3,13 @@ import { RefreshCw } from 'lucide-react';
 import PageHeader from '../components/PageHeader';
 import { Badge, Spinner, StatCard } from '../components/ui';
 import { api } from '../lib/tauri';
+import { syncQoderWebAccounts } from '../lib/qoderWebSync';
 import { fmtCredits, fmtTokens } from '../lib/format';
 import { withMinDelay } from '../lib/delay';
 import { useAppStore, type BoardNavIntent } from '../store';
 import type {
   QoderCreditsResult,
+  QoderWebUsage,
   UsageDayView,
   UsageHistoryResult,
   ViewKey,
@@ -44,18 +46,20 @@ export default function Overview() {
       const [
         traeUsage,
         wbAccounts, wbCredits, wbCheckin, wbOfficial, wbUsage,
-        qoderAccounts, qoderCredits, qoderWebUsage, qoderCheckin, qoderHistory,
+        qoderAccounts, qoderCredits, qoderWebCollect, qoderCheckin, qoderHistory,
         gwTrae, gwBuddy, gwBuddyAi, gwCustom, gwQoder,
       ] = await Promise.all([
         take(api.accounts.usageHistory(freshOfficial), null as UsageHistoryResult | null, 'Trae 官网消耗明细'),
         take(api.workbuddy.accountsList(), [], 'Buddy 账号'),
         take(api.workbuddy.creditsFetch(undefined, false), null as WbCreditsResult | null, 'Buddy 积分'),
         take(api.workbuddy.checkinResults(1), [], 'Buddy 签到记录'),
-        take(api.workbuddy.usageOfficialAll(), null as WbUsageOfficialAll | null, 'Buddy 官网用量'),
+        take(api.workbuddy.usageOfficialAll(freshOfficial), null as WbUsageOfficialAll | null, 'Buddy 官网用量'),
         take(api.workbuddy.usageFallback(), null, 'Buddy 本地用量回退'),
         take(api.qoder.accountsList(), [], 'Qoder 账号'),
         take(api.qoder.creditsFetch(undefined, false), null as QoderCreditsResult | null, 'Qoder 积分'),
-        take(api.qoder.webUsageToday(), null, 'Qoder 官网消耗明细'),
+        // 旧官网会话 cookie 通道已废弃（依赖客户端 cookie 库，实测不可用），
+        // 改由「官网采集（Webview 同源 fetch）」提供的 qoderWeb 数据源
+        take(api.qoder.webUsageGet(), null as QoderWebUsage | null, 'Qoder 官网采集'),
         take(api.qoder.checkinResults(1), [], 'Qoder 签到记录'),
         take(api.qoder.creditsHistoryList(), { snapshots: [] }, 'Qoder 积分快照'),
         take(api.apiServer.usageStats(1), null as UsageDayView[] | null, '网关 Trae 用量'),
@@ -74,7 +78,8 @@ export default function Overview() {
         wbUsage,
         qoderAccounts,
         qoderCredits,
-        qoderWebUsage,
+        qoderWebUsage: null, // 旧 cookie 通道已废弃（页面不再调用，避免无效日志）
+        qoderWeb: qoderWebCollect,
         qoderCheckin,
         qoderSnapshots: qoderHistory.snapshots,
         gwUsage: {
@@ -108,11 +113,57 @@ export default function Overview() {
     return () => window.clearTimeout(timer);
   }, [refreshing, load]);
 
+  // 已用积分 SWR 补取（同 Dashboard）：后端过期缓存先回旧值并转后台全量刷新
+  //（refreshing=true）；全量拉取 20-53s，间隔 10s/20s/30s 递增，命中新缓存即停。
+  // stale-on-error（刷新失败回退）不轮询，避免死循环。
+  const officialRefreshing = !!data?.wbOfficial?.refreshing;
+  const officialRetries = useRef(0);
+  useEffect(() => {
+    if (!officialRefreshing) {
+      officialRetries.current = 0;
+      return;
+    }
+    if (officialRetries.current >= 3) {
+      // 轮询用尽仍未拿到新值：本地清掉 refreshing，避免顶部徽标常驻假象
+      setData((d) =>
+        d?.wbOfficial?.refreshing ? { ...d, wbOfficial: { ...d.wbOfficial, refreshing: false } } : d,
+      );
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      officialRetries.current += 1;
+      void load();
+    }, 10_000 * (officialRetries.current + 1));
+    return () => window.clearTimeout(timer);
+  }, [officialRefreshing, load]);
+
   const view = useMemo(() => (data ? buildOverview({ ...data, nowMs: Date.now() }) : null), [data]);
   const kpis = view?.kpis;
 
   const refresh = () => {
-    void withMinDelay(load(true, true), 600).then((errors) =>
+    void withMinDelay(
+      (async () => {
+        // 先静默同步 Qoder 官网用量（已采集账号 → 隐藏窗口 + 已存登录态，无需重登）。
+        // 页面数据未就绪时向本地缓存取一次，避免首次加载完前点刷新不相步。
+        const view = data?.qoderWeb ?? (await api.qoder.webUsageGet().catch(() => null));
+        const collected = view?.accounts ?? [];
+        if (collected.length > 0) {
+          pushToast('info', `正在后台同步 Qoder 官网用量（${collected.length} 个账号）…`);
+          const r = await syncQoderWebAccounts(collected);
+          if (r.ok > 0) {
+            pushToast('success', `Qoder 官网用量已同步 ${r.ok}/${r.total} 个账号`);
+          }
+          if (r.failed.length > 0) {
+            pushToast(
+              'warn',
+              `${r.failed.length} 个账号同步失败（登录态可能已过期），请到 Qoder 积分看板重新采集`,
+            );
+          }
+        }
+        return load(true, true);
+      })(),
+      600,
+    ).then((errors) =>
       pushToast(errors.length ? 'warn' : 'success', errors.length ? '部分数据源加载失败，已保留其余平台数据' : '已刷新'),
     );
   };
@@ -129,6 +180,7 @@ export default function Overview() {
           <div className="flex items-center gap-2">
             {updatedAt && <span className="text-[12px] text-slate-400 dark:text-zinc-500">更新于 {new Date(updatedAt).toLocaleTimeString('zh-CN', { hour12: false })}</span>}
             {refreshing && <Badge tone="blue"><Spinner className="mr-1 h-3 w-3" /> 积分后台刷新中</Badge>}
+            {officialRefreshing && <Badge tone="blue"><Spinner className="mr-1 h-3 w-3" /> 已用积分后台刷新中</Badge>}
             {data?.wbOfficial?.stale && <Badge tone="amber" title={data.wbOfficial.stale_reason}>Buddy 官网用量过期缓存</Badge>}
             {failed.length > 0 && <Badge tone="amber" title={failed.join('、')}>{failed.length} 项数据源未加载</Badge>}
             <button onClick={refresh} className="btn-outline" disabled={loading}>
@@ -186,7 +238,7 @@ export default function Overview() {
       </div>
 
       <p className="mt-5 text-[12px] leading-relaxed text-slate-500 dark:text-zinc-400">
-        统计口径：Trae 今日已用取官网消耗明细（usage_history_fetch，缓存命中时标注）；Buddy 取官网用量聚合（workbuddy_usage_official_all），官网不可用时回退本地快照；Qoder 取 API 网关 Qoder 池实测积分（上游 usage.credits，逐账号可拆），网关当日无记录时依次回退官网会话消耗明细与本地积分快照差分。Token 消耗取 API 网关按落日用量（Trae / Buddy / Qoder 三池，按账号归入对应平台卡片；BuddyAI / 自定义池见 API 管理页用量统计）。刷新仅重载缓存/本地数据，强制上游积分刷新请进入对应平台积分看板。
+        统计口径：Trae 今日已用取官网消耗明细（usage_history_fetch，缓存命中时标注）；Buddy 取官网用量聚合（workbuddy_usage_official_all），官网不可用时回退本地快照；Qoder 优先取官网采集（Webview 同源 fetch，每个账号独立登录、按账号归档并做 uid 校验），不可用时依次回退 API 网关 Qoder 池实测积分、官网会话消耗明细与本地积分快照差分。Token 消耗取 API 网关按落日用量（Trae / Buddy / Qoder 三池，按账号归入对应平台卡片；BuddyAI / 自定义池见 API 管理页用量统计）。刷新会强制重拉 Trae/Buddy 官网用量（跳过 10min 缓存，全量聚合需数十秒）；Qoder 官网采集需在积分看板点「官网采集」并登录。
       </p>
     </div>
   );

@@ -563,6 +563,11 @@ fn main() {
         }
     };
 
+    // Qoder 目录恢复（重启不回落旧兜底表）：同步结果已落盘 kv `qoder_model_catalog`，
+    // 启动即回填进程缓存；此前目录只存内存，重启后至下次 05:50 同步前展示静态
+    // 兜底表（新上架模型缺失、倍率旧快照），与客户端 IDE 显示不一致
+    tasks::qoder_upstream::load_persisted(&state.data_dir);
+
     // CLI 任务模式（D2）：schtasks 计划任务直调主 exe（`--task-run <name>`），
     // 执行完任务即退出；分支在 Builder 之前，天然绕开单实例插件，不启动 GUI。
     // Python 运行时移除后计划任务链依赖此入口（原 python 脚本直调的替代）。
@@ -939,6 +944,8 @@ fn main() {
             commands::qoder::qoder_checkin_task_unregister,
             commands::qoder::qoder_credits_fetch,
             commands::qoder::qoder_web_usage_today,
+            commands::qoder::qoder_web_collect_start,
+            commands::qoder::qoder_web_usage_get,
             commands::qoder::qoder_credits_history_list,
             commands::qoder::qoder_sessions_query,
             commands::qoder::qoder_session_detail_query,

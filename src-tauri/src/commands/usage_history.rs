@@ -669,6 +669,19 @@ pub struct UsageSessionView {
     /// 轮键（Qoder 侧 chat_record_id；Trae/Buddy 上游无此字段恒空）。
     /// 同一段消息 + 同一模型 + 同一输出上限派生同值——「展开会话看各轮」分组用
     pub record_id: String,
+    // ── Qoder 官网采集专有字段（其余平台不填，前端仅在该源展示） ──
+    /// 原价积分（original_credits；折扣前名义消耗）
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub original_credits: Option<f64>,
+    /// 原价费用（original_cost）
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub original_cost: Option<f64>,
+    /// 折扣系数（0.8 = 8 折；上游 discount_factor）
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub discount_factor: Option<f64>,
+    /// 业务类型/来源（上游 source / operation / kind 组合）
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub source: Option<String>,
 }
 
 #[derive(Serialize, Clone, Default)]
@@ -747,6 +760,7 @@ pub fn usage_sessions_query(
                     cache_write_tokens: r.cache_write_tokens,
                     preview: r.preview.clone(),
                     record_id: String::new(),
+                    ..Default::default()
                 });
             }
         }

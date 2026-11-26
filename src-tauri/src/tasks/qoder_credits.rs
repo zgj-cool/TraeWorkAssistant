@@ -44,6 +44,12 @@ const CACHE_TTL_SECS: i64 = 600;
 /// TTL 过后自动复探：服务端放开鉴权/路由即自愈
 const PER_PACK_FAIL_TTL: std::time::Duration = std::time::Duration::from_secs(30 * 60);
 
+/// 逐包明细探测开关（2026-11-26 起默认关闭）：双端点对现有凭证恒 401/404
+/// （见上方 PER_PACK_FAIL_TTL 注释），每次刷新都产生无谓请求与日志；
+/// 用量统计已由官网采集（Webview 同源 fetch）覆盖。
+/// 服务端放开鉴权/路由后可改回 true 复探。
+const PER_PACK_PROBE_ENABLED: bool = false;
+
 /// 逐包明细失败负缓存（进程内内存态：账号 id → 首败时刻）
 fn per_pack_fail_cache(
 ) -> &'static std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>> {
@@ -483,7 +489,7 @@ fn fetch_account(
     let mut big_body: Option<Value> = None;
     let mut tried: Vec<String> = Vec::new();
     let fail_cached = per_pack_fail_hit(&aid);
-    if !fail_cached {
+    if PER_PACK_PROBE_ENABLED && !fail_cached {
         for host in [qoder_common::WEB_BASE, qoder_common::OPEN_API_BASE] {
             let big_url = format!("{host}/api/v2/me/usages/big_model_credits");
             let (bs, bb, _) = qoder_common::get_json(agent, &big_url, &headers);

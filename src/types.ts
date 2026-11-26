@@ -197,6 +197,14 @@ export interface UsageSessionView {
   preview: string;
   /** 轮键（Qoder 展开明细行返回 chat_record_id；会话级行与 Trae/Buddy 为空） */
   record_id?: string;
+  /** 原价积分（Qoder 官网 original_credits；折扣前名义消耗） */
+  original_credits?: number;
+  /** 原价费用（Qoder 官网 original_cost） */
+  original_cost?: number;
+  /** 折扣系数（Qoder 官网 discount_factor；0.8 = 8 折） */
+  discount_factor?: number;
+  /** 业务类型/来源（Qoder 官网 kind/operation/source 组合） */
+  source?: string;
 }
 
 export interface UsageSessionsResult {
@@ -1763,6 +1771,8 @@ export interface WbUsageOfficialAll {
   /** F-59 同款 stale-on-error：全部账号拉取失败时回退的过期聚合缓存 */
   stale?: boolean;
   stale_reason?: string;
+  /** SWR 语义：过期缓存先回旧值、后台刷新中（前端据此延迟重取；与 stale-on-error 区分） */
+  refreshing?: boolean;
   summary: { usage_today: number; usage_7days: number; usage_this_month: number };
   daily: { date: string; usage: number }[];
   /** 按模型汇总（31 天全窗口、跨账号合并；stale 旧缓存可能缺省） */
@@ -2106,6 +2116,52 @@ export interface QoderWebUsageToday {
   source?: string;
   fetched_at?: number;
   error?: string;
+}
+
+/** Qoder 官网采集：逐账号摘要（多账号分桶存储；verified = 页面 uid 与池内一致） */
+export interface QoderWebUsageAccount {
+  account_id: string;
+  account_name: string;
+  /** 采集时页面探测到的账号标识（接口可得时；不可得为 null） */
+  account_hint?: { uid?: string; email?: string; name?: string } | null;
+  verified?: boolean;
+  fetched_at_ms: number;
+  range_start: string;
+  range_end: string;
+  records_total: number;
+  billed_total: number;
+  summary: { usage_today: number; usage_7days: number; usage_this_month: number };
+  /** 逐账号逐日明细（31 天零填充；按账号筛选时前端重算汇总） */
+  daily?: {
+    date: string;
+    usage: number;
+    models: { model: string; request_count: number; credit: number }[];
+  }[];
+  models?: { model: string; request_count: number; credit: number }[];
+}
+
+/** Qoder 官网用量采集聚合（Webview 同源 fetch；近 31 天零填充，source=official_web） */
+export interface QoderWebUsage {
+  status: 'complete';
+  source: 'official_web';
+  fetched_at_ms: number;
+  updated_at_ms?: number;
+  range_start: string;
+  range_end: string;
+  records_total: number;
+  /** 实际扣费合计（credits 求和） */
+  billed_total: number;
+  summary: { usage_today: number; usage_7days: number; usage_this_month: number };
+  daily: {
+    date: string;
+    usage: number;
+    models: { model: string; request_count: number; credit: number }[];
+  }[];
+  models: { model: string; request_count: number; credit: number }[];
+  /** 已采集账号数（顶层汇总仅覆盖这些账号） */
+  accounts_total?: number;
+  /** 逐账号明细（多账号采集状态与筛选用；旧缓存缺省） */
+  accounts?: QoderWebUsageAccount[];
 }
 
 export interface QoderCreditsResult {

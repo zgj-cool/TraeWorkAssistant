@@ -157,6 +157,7 @@ pub(crate) fn aggregate_session_rows(
                     cache_write_tokens: 0,
                     preview: a.preview,
                     record_id: String::new(),
+                    ..Default::default()
                 },
             )
         })
@@ -185,6 +186,20 @@ pub fn qoder_sessions_query(
     }
     let model_filter = model.as_deref().map(str::trim).filter(|m| !m.is_empty());
     let uid_filter = user_id.as_deref().map(str::trim).filter(|u| !u.is_empty());
+
+    // 官网采集源优先（Webview 同源 fetch 行级明细，逐请求）；从未采集过 → 回退网关流水。
+    // Some（含空）表示官网源可用，不拿网关流水冒充同一口径。
+    if let Some(r) = super::web_collect::web_sessions_query(
+        &state,
+        &start,
+        &end,
+        model_filter,
+        uid_filter,
+        page,
+        page_size,
+    ) {
+        return Ok(r);
+    }
 
     // 账号展示名以账号池为准（uid → nickname）；拷入闭包所有权（with_conn 要求 'static 闭包）
     let name_of: HashMap<String, String> = load_account_names(&state);
@@ -282,6 +297,10 @@ pub fn qoder_session_detail_query(
     // 会话行代表键为空串时（失败桶）不按 sid 匹配，仅按 preview 归并
     let sid = session_id.trim().to_string();
     let pv = preview.trim().to_string();
+    // 官网行级明细命中 → 直接返回（未采集/未命中 → 网关流水明细）
+    if let Some(rows) = super::web_collect::web_session_detail_query(&state, &date, &uid, &sid, &pv) {
+        return Ok(rows);
+    }
     let name_of = load_account_names(&state);
     crate::store::db(&state.data_dir).with_conn(move |c| {
         // 失败桶（sid 空）不得带 `session_id = ''` 条件——那会把同日同账号
@@ -336,6 +355,7 @@ pub fn qoder_session_detail_query(
                 cache_write_tokens: 0,
                 preview: row_preview,
                 record_id,
+                ..Default::default()
             });
         }
         Ok(rows)

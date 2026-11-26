@@ -182,6 +182,7 @@ pub fn custom_session_detail_query(
                 cache_write_tokens: 0,
                 preview: row_preview,
                 record_id: String::new(),
+                ..Default::default()
             });
         }
         Ok(rows)

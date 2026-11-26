@@ -51,8 +51,8 @@ ai-work-assistant/
 │   ├── lib/                      # tauri.ts(invoke 封装+事件订阅) / themes.ts(主题) / delay.ts(withMinDelay) / cn.ts / about.ts / useIsDark.ts
 │   ├── components/               # TitleBar/Sidebar/TopBar/Toaster/PageHeader/SetupGuide/ui + SystemDialog(系统设置+系统日志弹框)/GeneralSettingsPanel/AboutDialog
 │   └── pages/                    # Overview(全平台总览) / Dashboard / Accounts(661行编排 + accounts/ 16 个拆分子组件) / Checkin / Logs / ApiService / Settings
-│   │                             #   overview/ 总览聚合纯函数 overviewModel + 卡片组件 OverviewCards（仅 Trae/Buddy/Qoder 三积分平台；平台头用官方 logo 图片 src/assets/logos；顶部 6 卡：账号/可用积分/今日已用积分/今日 Token（API 网关三平台池）/7 天到期/账号告警；每张平台卡片内嵌逐账号明细四栏（自上而下）：各账号积分消耗明细（Trae/Buddy 官网逐账号、Qoder 快照差分）、今日 Token（account_tokens）、7 日内到期、待处理凭证；前三栏**常驻**（无数据渲染空态），凭证告警按需渲染）
-│   │                             #   dashboard/ 积分看板（platform 参数化：credits 视图=Trae 页、buddy-credits 视图=Buddy 页、qoder-credits 视图=Qoder 页替换旧 QoderCredits；KpiRow/CreditsTab/TokensTab/ExpiryTab/adapters；积分统计与 Token 统计 Tab 的日期范围默认「今日」——useDateRange 默认 today）
+│   │                             #   overview/ 总览聚合纯函数 overviewModel + 卡片组件 OverviewCards（仅 Trae/Buddy/Qoder 三积分平台；平台头用官方 logo 图片 src/assets/logos；顶部 6 卡：账号/可用积分/今日已用积分/今日 Token（API 网关三平台池）/7 天到期/账号告警；每张平台卡片内嵌逐账号明细四栏（自上而下）：各账号积分消耗明细（Trae/Buddy 官网逐账号、Qoder 网关逐账号/快照差分）、今日 Token（account_tokens）、7 日内到期、待处理凭证；前三栏**常驻**（无数据渲染空态），凭证告警按需渲染）
+│   │                             #   dashboard/ 积分看板（platform 参数化：credits 视图=Trae 页、buddy-credits 视图=Buddy 页、qoder-credits 视图=Qoder 页替换旧 QoderCredits；KpiRow/CreditsTab/TokensTab/ExpiryTab/adapters；积分统计与 Token 统计 Tab 的日期范围默认「今日」——useDateRange 默认 today）；Qoder 页工具行「官网采集」= 按账号独立 Webview 数据目录登录后同源 fetch 官方 histories（31 天，日×模型；commands/qoder/web_collect.rs），结果按账号写入 kv `qoder_web_usage_cache` 的 accounts 桶（回环回传 + 随机 token，登录 uid 与池内校验）；登录态经 WebView2 CookieManager 导出、DPAPI 加密落盘 `qoder_web/cookies/<账号>.bin`（web_cookies.rs），每个账号只登录一次；「刷新数据」对已采集账号用隐藏窗口静默重采（无需重登），积分统计「官网」源、模型排行与 KPI「今日已用」优先采用（支持按账号筛选重算）
 │   │                             #   buddy/（BuddyOverview/BuddyAccounts/BuddyCheckin/BuddyApiService/BuddySettings）
 ├── scripts/                      # dev-tauri.mjs(tauri 脚本入口) / sync_version.mjs / rename_release.mjs / package_portable.mjs / gen_asset_base64.mjs
 ├── src-tauri/
@@ -80,7 +80,7 @@ ai-work-assistant/
 │       │   ├── models_sync.rs    # 模型列表配置化（api_models.json）+ 官网 batch_get_detail_param 同步
 │       │   └── api_logger.rs     # API 请求日志
 │       └── commands/             # env / cert / proxy / accounts / checkin / switch / misc / profile / api_server / oauth / trae_apps(本机 Trae 账号发现) / process(三级关闭) / updater / wb_config(wb 手工配置读写)；workbuddy/ 为目录模块（common/accounts/checkin/credits/cli/chatdata/oauth/env_reset，mod.rs pub use 保持命令路径不变）
-│       └── tasks/                # 后台业务直调模块（trae_checkin / wb_checkin / wb_common / wb_credits / qoder_web_usage（官网会话今日消耗） / doubao_session / doubao_quota / doubao_chats / ui_click）
+│       └── tasks/                # 后台业务直调模块（trae_checkin / wb_checkin / wb_common / wb_credits / qoder_web_usage（官网会话今日消耗；Webview 采集见 commands/qoder/web_collect.rs） / doubao_session / doubao_quota / doubao_chats / ui_click）
 │           ├── trae_checkin.rs   # 批量签到（vault 解密内存传递，无子进程）
 │           ├── wb_checkin.rs     # WorkBuddy 签到/成长/续期（run_checkin_round / run_growth_round / run_renew_only）
 │           └── doubao_*.rs       # 豆包会话续期 / 额度巡检 / 对话导出

@@ -232,10 +232,11 @@ export default function BuddyAiCredits() {
     void load();
   }, [load]);
 
-  // 官网聚合拉取（后端 10min 缓存 + stale-on-error；「刷新数据」联动重拉）
-  const loadOfficial = useCallback(async () => {
+  // 官网聚合拉取（后端 10min 缓存 + stale-on-error；「刷新数据」传 fresh=true 强制重拉——
+  // 此前命令无参数恒走缓存，已用积分要等缓存过期才更新，用户感知为「延迟几分钟才同步」）
+  const loadOfficial = useCallback(async (fresh = false) => {
     try {
-      setOfficialAll(await api.buddyai.usageOfficialAll());
+      setOfficialAll(await api.buddyai.usageOfficialAll(fresh));
     } catch (err) {
       pushToast('error', `官网用量聚合查询失败：${String(err).slice(0, 160)}`);
     }
@@ -275,8 +276,8 @@ export default function BuddyAiCredits() {
         setAccounts(n);
         const ok = n.filter((a) => a.credits_balance != null).length;
         pushToast('success', `积分已同步（${ok}/${n.length} 个账号取数成功）`);
-        // 已加载过的源随全局刷新联动（官网聚合 10min 缓存过期后此路强制重拉窗口内数据）
-        if (officialLoadedRef.current) void loadOfficial();
+        // 已加载过的源随全局刷新联动（官网聚合 fresh=true 跳过 10min 缓存强制重拉窗口内数据）
+        if (officialLoadedRef.current) void loadOfficial(true);
         if (tokensLoadedRef.current) void loadTokenStats(true);
         // 会话明细落地缓存重查（积分同步顺带官网聚合 → 行级明细随路落盘）
         setSessReload((k) => k + 1);

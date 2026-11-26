@@ -1020,12 +1020,19 @@ fn usage_official_fetch(
 }
 
 /// 全账号官方用量聚合（Buddy 积分看板「近 7 日积分消耗」主数据源）：
-/// force=false 走 10min 缓存；调度器 wb-credits-snapshot 以 force=true 定时预热本缓存
-/// （issue #61 同款缺口：此前调度器只刷单账号 workbuddy_usage_official_cache，
-/// 而看板消费的是本全账号聚合缓存，页面常驻时近 7 日趋势停留在最后打开时刻）。
+/// refresh=true 跳过 10min 缓存强制上游拉取（「刷新数据」按钮语义）——此命令此前无参数、
+/// 恒 force=false，已用积分只能等缓存自然过期 + 后台 SWR 完成后「再刷一次」才更新，
+/// 用户感知为「延迟几分钟才跟官网同步」；缺省走 10min 缓存；调度器 wb-credits-snapshot
+/// 仍以 force=true 定时预热本缓存（issue #61 同款缺口：此前调度器只刷单账号
+/// workbuddy_usage_official_cache，而看板消费的是本全账号聚合缓存，页面常驻时近 7 日趋势
+/// 停留在最后打开时刻）。
+/// 注意：Tauri 参数名为 refresh，前端 invoke 的 key 必须写 refresh（写 fresh 会被静默忽略）。
 #[tauri::command(async)]
-pub fn workbuddy_usage_official_all(state: State<AppState>) -> Result<serde_json::Value, String> {
-    workbuddy_usage_official_all_impl(&state, false)
+pub fn workbuddy_usage_official_all(
+    state: State<AppState>,
+    refresh: Option<bool>,
+) -> Result<serde_json::Value, String> {
+    workbuddy_usage_official_all_impl(&state, refresh.unwrap_or(false))
 }
 
 /// 实现（本命令与调度器 wb-credits-snapshot 用量刷新共用）：
@@ -1052,11 +1059,14 @@ pub(crate) fn workbuddy_usage_official_all_impl(
             if chrono::Utc::now().timestamp_millis() - fetched < 10 * 60_000 {
                 return Ok(cached.clone());
             }
-            // SWR：转后台刷新并先回旧值（标记 stale，前端已兼容该字段——失败回退同款）
+            // SWR：转后台刷新并先回旧值。stale 保持「刷新失败回退」语义不变，另打
+            // refreshing=true 供前端轮询重取（对齐 wb_credits::stale_reply 的 refreshing 契约；
+            // 后台完成后再调用即命中新缓存、该标记消失）
             spawn_official_all_refresh(state);
             let mut stale = cached.clone();
             stale["stale"] = serde_json::json!(true);
             stale["stale_reason"] = serde_json::json!("swr_background_refresh");
+            stale["refreshing"] = serde_json::json!(true);
             return Ok(stale);
         }
     }
@@ -1370,6 +1380,7 @@ pub fn workbuddy_sessions_query(
                 cache_write_tokens: 0,
                 preview: r.get("preview").and_then(Value::as_str).unwrap_or("").to_string(),
                 record_id: String::new(),
+                ..Default::default()
             });
         }
     }

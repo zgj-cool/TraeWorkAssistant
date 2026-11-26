@@ -13,10 +13,11 @@ import type { PlatformScope } from './KpiRow';
  * Trae 数据源为官网 query_user_usage_group_by_session 会话行缓存（纯缓存零网络）；
  * Buddy 数据源为官网请求级计费明细落盘（get-user-request-usage，随官方用量拉取保鲜），
  * 上游无 token/会话说明字段 → 相应列隐藏；
- * Qoder 数据源为 API 网关请求级本地流水（issue #82 问题5：官网无会话明细接口，
- * 由 record_usage_qoder 转发时逐请求落库），无费用/缓存 token 字段 → 相应列隐藏。
+ * Qoder 数据源优先官网采集行级明细（Webview 同源 fetch histories，逐请求、含会话说明；
+ * 积分看板「官网采集」时随路落盘），未采集时回退 API 网关请求级本地流水
+ *（record_usage_qoder 转发时逐请求落库）；两者均无费用/缓存 token 字段 → 相应列隐藏。
  * Qoder 行支持展开看各轮请求级明细（键口径 session_id ∪ preview，纯本地零网络；
- * 已被定时合并的历史区间展开仅返回聚合行）。
+ * 官网源下展开即该请求本身）。
  */
 
 const PAGE_SIZE = 50;
@@ -242,6 +243,13 @@ export default function SessionsTab({
         </div>
       )}
 
+      {scope === 'qoder' && (
+        <p className="mb-2 text-[11px] leading-relaxed text-slate-400">
+          Qoder 会话明细优先取自官网采集（积分看板「官网采集」逐请求落盘）；未采集时回退 API 网关本地流水。
+          官网行不含 token，相关列为 0；「原价/折扣/费用」取自上游 original_credits / discount_factor / cost。
+        </p>
+      )}
+
       {data && data.total === 0 ? (
         // fetched_at > 0 表示已成功拉取过缓存：total===0 属筛选后无结果，不再引导刷新（审查 P4）
         <EmptyState
@@ -270,7 +278,8 @@ export default function SessionsTab({
                   {scope === 'qoder' && <th className="w-8" />}
                   <th className="px-4 py-2 text-left">时间</th>
                   <th className="px-4 py-2 text-left">账号</th>
-                  <th className="px-4 py-2 text-left">会话说明</th>
+                  {/* Qoder 官网无会话说明字段（name 为空）→ 该页隐藏此列，不展示空列 */}
+                  {scope !== 'qoder' && <th className="px-4 py-2 text-left">会话说明</th>}
                   <th className="px-4 py-2 text-left">模型</th>
                   <th className="px-4 py-2 text-right">消耗积分</th>
                   {richColumns && (
@@ -290,6 +299,19 @@ export default function SessionsTab({
                         缓存 (读/写)
                       </th>
                       <th className="px-4 py-2 text-right">费用</th>
+                    </>
+                  )}
+                  {scope === 'qoder' && (
+                    <>
+                      <th
+                        className="px-4 py-2 text-right"
+                        title="官网 original_credits（折扣前原价）/ discount_factor（折扣系数）"
+                      >
+                        原价 / 折扣
+                      </th>
+                      <th className="px-4 py-2 text-right" title="官网 cost（实际费用）">
+                        费用
+                      </th>
                     </>
                   )}
                 </tr>
@@ -318,7 +340,12 @@ export default function SessionsTab({
                 {data && data.rows.length === 0 && (
                   <tr>
                     <td
-                      colSpan={5 + (richColumns ? 1 : 0) + (showCacheCost ? 2 : 0) + (scope === 'qoder' ? 1 : 0)}
+                      colSpan={
+                        (scope === 'qoder' ? 4 : 5) +
+                        (richColumns ? 1 : 0) +
+                        (showCacheCost ? 2 : 0) +
+                        (scope === 'qoder' ? 3 : 0)
+                      }
                       className="px-4 py-6 text-center text-xs text-slate-400"
                     >
                       当前筛选条件下无会话记录
@@ -390,7 +417,13 @@ function RowWithDetail({
   onToggle: () => void;
 }) {
   const expandable = scope === 'qoder';
-  const span = 5 + (richColumns ? 1 : 0) + (showCacheCost ? 2 : 0) + (expandable ? 1 : 0);
+  // Qoder 官网无会话说明字段 → 该页不渲染说明列（基础列 5 → 4）
+  const baseCols = scope === 'qoder' ? 4 : 5;
+  const span =
+    baseCols +
+    (richColumns ? 1 : 0) +
+    (showCacheCost ? 2 : 0) +
+    (scope === 'qoder' ? 3 : 0);
   return (
     <>
       <tr className="row-hover border-t border-slate-200/70 dark:border-zinc-800">
@@ -411,13 +444,15 @@ function RowWithDetail({
         <td className="whitespace-nowrap px-4 py-2 text-xs">
           {r.account_name || r.user_id}
         </td>
-        {/* 概述开关关闭（T6.1）时仅隐藏展示（显示 '—'），不动缓存与查询 */}
-        <td
-          className="max-w-[260px] truncate px-4 py-2 text-xs"
-          title={showPreview ? r.preview : undefined}
-        >
-          {showPreview ? r.preview || '—' : '—'}
-        </td>
+        {/* Qoder 官网无会话说明字段 → 该页不渲染说明列 */}
+        {scope !== 'qoder' && (
+          <td
+            className="max-w-[260px] truncate px-4 py-2 text-xs"
+            title={showPreview ? r.preview : undefined}
+          >
+            {showPreview ? r.preview || '—' : '—'}
+          </td>
+        )}
         <td className="whitespace-nowrap px-4 py-2 text-xs">
           <div className="flex items-center gap-1.5">
             <span>{r.model}</span>
@@ -464,6 +499,27 @@ function RowWithDetail({
             </td>
           </>
         )}
+        {scope === 'qoder' && (
+          <>
+            <td
+              className="whitespace-nowrap px-4 py-2 text-right text-xs tabular-nums text-slate-500"
+              title={
+                r.original_cost != null ? `原价费用 ${r.original_cost.toFixed(4)}` : undefined
+              }
+            >
+              {r.original_credits != null
+                ? `${fmtCredits(r.original_credits)}${
+                    r.discount_factor != null && r.discount_factor > 0 && r.discount_factor < 1
+                      ? ` · ${(r.discount_factor * 10).toFixed(1).replace(/\.0$/, '')} 折`
+                      : ''
+                  }`
+                : '—'}
+            </td>
+            <td className="px-4 py-2 text-right text-xs tabular-nums text-slate-500">
+              {r.cost_money > 0 ? r.cost_money.toFixed(4) : '—'}
+            </td>
+          </>
+        )}
       </tr>
       {expandable && expanded && (
         <tr key={`${rowKey}-detail`} className="border-t border-slate-100 bg-slate-50/60 dark:border-zinc-800 dark:bg-zinc-900/60">
@@ -499,6 +555,17 @@ function RowWithDetail({
                       <span className="max-w-[240px] truncate text-slate-400" title={d.preview}>
                         {d.preview}
                       </span>
+                    )}
+                    {d.original_credits != null && (
+                      <span className="text-slate-400">
+                        原价 {fmtCredits(d.original_credits)}
+                        {d.discount_factor != null && d.discount_factor > 0 && d.discount_factor < 1
+                          ? ` · ${(d.discount_factor * 10).toFixed(1).replace(/\.0$/, '')} 折`
+                          : ''}
+                      </span>
+                    )}
+                    {d.cost_money > 0 && (
+                      <span className="text-slate-400">费用 {d.cost_money.toFixed(4)}</span>
                     )}
                     {d.record_id && (
                       <span className="font-mono text-slate-300 dark:text-zinc-600" title={`轮键 ${d.record_id}`}>

@@ -81,8 +81,24 @@ pub fn run_task(state: &AppState) -> Result<Value, String> {
                             .map_err(|e| format!("model/list 响应非 JSON: {e}"))
                     })
                     .and_then(|payload| {
-                        qoder_upstream::adopt_remote(qoder_upstream::QoderRegion::Cn, &payload)
-                            .map_err(|e| format!("model/list 目录采纳失败: {e}"))
+                        let count = qoder_upstream::adopt_remote(
+                            qoder_upstream::QoderRegion::Cn,
+                            &payload,
+                        )
+                        .map_err(|e| format!("model/list 目录采纳失败: {e}"))?;
+                        // 目录落盘（重启恢复；此前只存进程内存，重启即回落静态兜底表，
+                        // 表现为「目录缺新模型/倍率回旧快照」）
+                        if let Err(e) = qoder_upstream::save_persisted(&state.data_dir) {
+                            crate::fs_utils::app_log(
+                                &state.data_dir,
+                                &format!("[qoder] 模型目录落盘失败: {e}"),
+                            );
+                        }
+                        crate::fs_utils::app_log(
+                            &state.data_dir,
+                            &format!("[qoder] 模型目录同步（账号 {id}）：采纳 {count} 条"),
+                        );
+                        Ok(count)
                     })
                 {
                     Ok(count) => return Ok(json!({ "ok": true, "models": count, "account": id })),

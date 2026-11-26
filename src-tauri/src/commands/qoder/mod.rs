@@ -16,6 +16,7 @@
 //!   group_id；账号读改写持 qoder_pool_lock 互斥，与导入互斥）
 //! - `ide_store`：IDE/Work 客户端本地存储发现导入（含 WAL 残留检测）
 //! - `oauth`：设备授权登录（浏览器授权 + 轮询导入；qoder-oauth-progress/done 事件）
+//! - `web_collect`：官网用量采集（Webview 同源 fetch 回传，绕过 App-Bound cookie 解密）
 
 mod accounts;
 pub(crate) mod checkin;
@@ -28,6 +29,8 @@ mod groups;
 mod ide_store;
 mod oauth;
 mod sessions;
+pub(crate) mod web_cookies;
+mod web_collect;
 
 pub use accounts::*;
 pub use checkin::*;
@@ -40,3 +43,4 @@ pub use groups::*;
 pub use ide_store::*;
 pub use oauth::*;
 pub use sessions::*;
+pub use web_collect::*;

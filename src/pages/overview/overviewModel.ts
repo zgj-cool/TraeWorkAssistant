@@ -5,6 +5,7 @@ import type {
   QoderCheckinRecord,
   QoderCreditsResult,
   QoderCreditsSnapshot,
+  QoderWebUsage,
   QoderWebUsageToday,
   UsageDayView,
   UsageHistoryResult,
@@ -138,8 +139,10 @@ export interface OverviewData {
   qoderCheckin: QoderCheckinRecord[];
   /** Qoder 本地积分快照差分（官网会话不可用时回退） */
   qoderSnapshots: QoderCreditsSnapshot[];
-  /** Qoder 官网会话今日消耗（优先） */
+  /** Qoder 旧官网会话 Cookie 通道（已废弃：页面恒传 null；保留字段兼容测试与历史调用） */
   qoderWebUsage: QoderWebUsageToday | null;
+  /** Qoder 官网采集聚合（Webview 同源 fetch，官方原始口径；仅本机登录账号） */
+  qoderWeb?: QoderWebUsage | null;
   /** API 网关五桶今日用量（Token 消耗统计来源；缺省 = 未接入/加载失败） */
   gwUsage?: Partial<Record<GatewayPoolKey, UsageDayView[] | null>>;
   nowMs?: number;
@@ -351,8 +354,12 @@ export function summarizeQoder(
   snapshots: QoderCreditsSnapshot[],
   webUsage: QoderWebUsageToday | null,
   nowMs = Date.now(),
-  /** API 网关 Qoder 池当日用量（积分测量口径，消耗统计首选数据源） */
+  /** API 网关 Qoder 池当日用量（积分测量口径） */
   gatewayDay: UsageDayView | null = null,
+  /** 官网采集（Webview 同源 fetch；仅覆盖已采集账号） */
+  webCollect: QoderWebUsage | null = null,
+  /** 逐账号今日消耗（buildOverview 预计算；缺省时按单源优先级回退，供单测直接调用） */
+  usedByUid?: Map<string, QoderUsedEntry>,
 ): PlatformSummary {
   const nowSec = Math.floor(nowMs / 1000);
   const windowEnd = nowSec + EXPIRY_SEC;
@@ -416,27 +423,46 @@ export function summarizeQoder(
   }
 
   const todaySnap = [...snapshots].reverse().find((s) => s.date.slice(0, 10) === today);
-  // 消耗统计口径：API 网关 Qoder 池积分测量值优先（唯一覆盖全部走网关流量、
-  // 且可逐账号/逐模型分账的权威源）；网关当日无条目时回退官网会话明细，
-  // 再回退本地积分快照差分。三者覆盖范围不同，notes 如实标注当前生效口径。
+  // 消耗统计口径优先级（逐账号）：官网采集（官方原始接口）> API 网关实测 > 本地快照差分。
+  // buildOverview 会预计算 usedByUid 传入，保证「KPI 合计 = 明细合计」。
+  const collectUsed = webCollect?.summary?.usage_today != null ? round(webCollect.summary.usage_today) : null;
   const gatewayUsed = gatewayDay ? round(gatewayDay.credits) : null;
   const officialUsed = webUsage?.ok ? webUsage.used_today : null;
-  const usedToday =
-    gatewayUsed != null
-      ? gatewayUsed
-      : officialUsed != null
-        ? round(officialUsed)
-        : todaySnap?.consumed != null
-          ? round(todaySnap.consumed)
-          : null;
-  const sourceNote =
-    gatewayUsed != null
-      ? '今日已用：API 网关 Qoder 池实测积分'
-      : officialUsed != null
-        ? '今日已用：官网会话消耗明细（当前客户端登录账号）'
-        : webUsage?.error
-          ? '今日已用：官网会话不可用，回退本地快照'
-          : '今日已用：本地积分快照差分';
+  let usedToday: number | null;
+  let collectAccountCount = 0;
+  let usedEntryCount = 0;
+  if (usedByUid) {
+    const vals = [...usedByUid.values()];
+    usedEntryCount = vals.length;
+    collectAccountCount = vals.filter((v) => v.source.startsWith('官网采集')).length;
+    usedToday = vals.length ? round(vals.reduce((s, v) => s + v.credits, 0)) : null;
+  } else {
+    usedToday =
+      collectUsed != null
+        ? collectUsed
+        : gatewayUsed != null
+          ? gatewayUsed
+          : officialUsed != null
+            ? round(officialUsed)
+            : todaySnap?.consumed != null
+              ? round(todaySnap.consumed)
+              : null;
+  }
+  const sourceNote = usedByUid
+    ? usedToday == null
+      ? '今日已用：暂无可用数据源'
+      : collectAccountCount > 0
+        ? `今日已用：官网采集 ${collectAccountCount}/${accounts.length} 账号${collectAccountCount < usedEntryCount ? '（其余回退网关/快照）' : ''}`
+        : '今日已用：API 网关实测 / 快照差分'
+    : collectUsed != null
+      ? `今日已用：官网采集（官方接口，已采集 ${webCollect?.accounts_total ?? 0} 账号）`
+      : gatewayUsed != null
+        ? '今日已用：API 网关 Qoder 池实测积分'
+        : officialUsed != null
+          ? '今日已用：官网会话消耗明细（当前客户端登录账号）'
+          : webUsage?.error
+            ? '今日已用：官网会话不可用，回退本地快照'
+            : '今日已用：本地积分快照差分';
   return finish(
     'qoder',
     accounts.length,
@@ -533,15 +559,78 @@ export function summarizeGatewayTokens(data: OverviewData, nowMs = Date.now()): 
   };
 }
 
+/** 逐账号今日消耗条目（source 用于明细「口径」列与 KPI 备注） */
+export interface QoderUsedEntry {
+  credits: number;
+  source: string;
+}
+
+/**
+ * Qoder 逐账号今日消耗（三源按优先级取一）：
+ * ① 官网采集（Webview 同源 fetch，官方原始口径 original_credits）
+ * ② API 网关 Qoder 池实测积分（仅覆盖走网关流量）
+ * ③ 本地快照差分（消耗 = 前日余额 + 当日签到 − 当日余额）
+ * 逐账号取最高优先源后求和，保证「KPI 合计 = 明细合计」，
+ * 不会因为部分账号未采集而把整池口径压成已采集子集。
+ */
+export function qoderUsedByUid(data: OverviewData, today: string): Map<string, QoderUsedEntry> {
+  const out = new Map<string, QoderUsedEntry>();
+  // ① 官网采集（逐账号）
+  for (const a of data.qoderWeb?.accounts ?? []) {
+    out.set(a.account_id, {
+      credits: round(a.summary.usage_today),
+      source: '官网采集（逐账号）',
+    });
+  }
+  // ② 网关实测（当日有该账号记录且为非零）
+  for (const c of todayUsage(data.gwUsage?.qoder, today)?.accounts ?? []) {
+    if (out.has(c.name) || c.credits <= 0) continue;
+    out.set(c.name, { credits: round(c.credits), source: 'API 网关实测积分' });
+  }
+  // ③ 快照差分
+  const snaps = [...(data.qoderSnapshots ?? [])].sort((x, y) => x.date.localeCompare(y.date));
+  const todaySnap = snaps.find((s) => s.date.slice(0, 10) === today) ?? null;
+  const prevSnap = todaySnap
+    ? ([...snaps].reverse().find((s) => s.date.slice(0, 10) < today) ?? null)
+    : null;
+  const earnedByUid = new Map<string, number>();
+  for (const r of data.qoderCheckin ?? []) {
+    if (r.date !== today || r.status === 'fail') continue;
+    const reward = r.campaigns?.length
+      ? r.campaigns.reduce((s, c) => s + (c.reward ?? 0), 0)
+      : (r.reward ?? 0);
+    if (reward > 0) earnedByUid.set(r.user_id, (earnedByUid.get(r.user_id) ?? 0) + reward);
+  }
+  for (const a of data.qoderAccounts) {
+    if (out.has(a.id)) continue;
+    const cur = todaySnap?.accounts?.find((x) => x.user_id === a.id)?.total ?? null;
+    const prev = prevSnap?.accounts?.find((x) => x.user_id === a.id)?.total ?? null;
+    if (cur == null || prev == null) continue;
+    const earned = earnedByUid.get(a.id) ?? 0;
+    out.set(a.id, {
+      credits: Math.max(0, round(prev + earned - cur)),
+      source:
+        earned > 0 ? `快照差分（含当日签到 +${round(earned)} 补正）` : '快照差分',
+    });
+  }
+  return out;
+}
+
 /**
  * 逐账号今日积分消耗明细。
  * 口径：Trae = 官网消耗明细逐账号当日 credits；Buddy = 官网全账号用量的逐账号
- * usage_today（本次新增字段，旧缓存缺省时标注仅合计口径）；Qoder = 本地积分快照
- * 前后两日余额差分（官网无逐账号按日消耗接口，含签到奖励时可能低估，负值记 0）。
+ * usage_today（旧缓存缺省时标注仅合计口径）；Qoder = 官网采集 > 网关实测 > 快照差分
+ * （逐账号取最高优先源，见 qoderUsedByUid）。
  * 无账号级数据的账号仍列出（credits=null + 缺失原因），避免误以为账号缺失。
  */
-export function summarizeCreditUsage(data: OverviewData, nowMs = Date.now()): CreditUsageSummary {
+export function summarizeCreditUsage(
+  data: OverviewData,
+  nowMs = Date.now(),
+  /** 逐账号今日消耗（buildOverview 预计算并复用；缺省时内部自行计算） */
+  usedByUid?: Map<string, QoderUsedEntry>,
+): CreditUsageSummary {
   const today = localDate(nowMs);
+  const qoderUsed = usedByUid ?? qoderUsedByUid(data, today);
   const rows: CreditUsageRow[] = [];
 
   const traeUsageByUid = new Map((data.traeUsage?.accounts ?? []).map((a) => [a.user_id, a]));
@@ -577,59 +666,28 @@ export function summarizeCreditUsage(data: OverviewData, nowMs = Date.now()): Cr
 
   const snaps = [...(data.qoderSnapshots ?? [])].sort((x, y) => x.date.localeCompare(y.date));
   const todaySnap = snaps.find((s) => s.date.slice(0, 10) === today) ?? null;
-  const prevSnap = todaySnap
-    ? ([...snaps].reverse().find((s) => s.date.slice(0, 10) < today) ?? null)
-    : null;
-  // 当日签到奖励按账号汇总（奖励口径与「获得积分」同源：campaigns 明细优先，
-  // 无明细时回退 reward）。**必须参与差分**：Qoder 每日签到 +100 会让余额逆势上涨，
-  // 只算「前日 − 当日」会把真实消耗钳成 0（线上表现为明细恒 0），
-  // 正确公式与后端快照 consumed 一致：消耗 = 前日余额 + 当日获得 − 当日余额
-  const earnedByUid = new Map<string, number>();
-  for (const r of data.qoderCheckin ?? []) {
-    if (r.date !== today || r.status === 'fail') continue;
-    const reward = r.campaigns?.length
-      ? r.campaigns.reduce((s, c) => s + (c.reward ?? 0), 0)
-      : (r.reward ?? 0);
-    if (reward > 0) earnedByUid.set(r.user_id, (earnedByUid.get(r.user_id) ?? 0) + reward);
-  }
-  // Qoder 逐账号消耗：API 网关 Qoder 池当日积分测量值优先（accounts[].credits，
-  // uid 即账号 id 口径）；网关当日无该账号记录时回退本地快照差分
-  // （消耗 = 前日余额 + 当日签到 − 当日余额，负值记 0）。
-  const gwCreditsByUid = new Map<string, number>();
-  for (const c of data.gwUsage?.qoder ? (todayUsage(data.gwUsage.qoder, today)?.accounts ?? []) : []) {
-    if (c.credits > 0) gwCreditsByUid.set(c.name, c.credits);
-  }
+  // Qoder 逐账号消耗：官网采集 > API 网关实测 > 本地快照差分（qoderUsedByUid 统一计算）
   for (const a of data.qoderAccounts) {
-    const gwUsed = gwCreditsByUid.get(a.id);
-    if (gwUsed != null) {
+    const hit = qoderUsed.get(a.id);
+    if (hit) {
       rows.push({
         id: `qoder-${a.id}`,
         platform: 'qoder',
         uid: a.id,
         name: a.nickname,
-        credits: round(gwUsed),
-        source: 'API 网关实测积分',
+        credits: hit.credits,
+        source: hit.source,
       });
       continue;
     }
-    const cur = todaySnap?.accounts?.find((x) => x.user_id === a.id)?.total ?? null;
-    const prev = prevSnap?.accounts?.find((x) => x.user_id === a.id)?.total ?? null;
-    const earned = earnedByUid.get(a.id) ?? 0;
-    const used = cur != null && prev != null ? Math.max(0, round(prev + earned - cur)) : null;
+    // 三源均无数据：保留原因标注（官网未采集 + 快照不可比/未更新）
     rows.push({
       id: `qoder-${a.id}`,
       platform: 'qoder',
       uid: a.id,
       name: a.nickname,
-      credits: used,
-      source:
-        used != null
-          ? earned > 0
-            ? `快照差分（含当日签到 +${round(earned)} 补正）`
-            : '快照差分'
-          : todaySnap
-            ? '快照无前一日对比'
-            : '今日快照未更新',
+      credits: null,
+      source: todaySnap ? '快照无前一日对比' : '今日快照未更新',
     });
   }
 
@@ -662,6 +720,8 @@ export function buildOverview(data: OverviewData): {
   credits: CreditUsageSummary;
 } {
   const now = data.nowMs ?? Date.now();
+  // 逐账号消耗先算一份，KPI 与明细共用（保证「KPI 合计 = 明细合计」）
+  const qoderUsed = qoderUsedByUid(data, localDate(now));
   const platforms = [
     summarizeTrae(data.traeAccounts, data.traeUsage, now),
     summarizeBuddy(data.wbAccounts, data.wbCredits, data.wbCheckin, data.wbOfficial, data.wbUsage, now),
@@ -673,12 +733,14 @@ export function buildOverview(data: OverviewData): {
       data.qoderWebUsage,
       now,
       todayUsage(data.gwUsage?.qoder, localDate(now)),
+      data.qoderWeb ?? null,
+      qoderUsed,
     ),
   ];
   return {
     platforms,
     kpis: aggregateKpis(platforms),
     tokens: summarizeGatewayTokens(data, now),
-    credits: summarizeCreditUsage(data, now),
+    credits: summarizeCreditUsage(data, now, qoderUsed),
   };
 }

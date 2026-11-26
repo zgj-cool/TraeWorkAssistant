@@ -1522,9 +1522,14 @@ pub fn buddy_ai_request_usage(
 /// 遍历 buddy-ai 池启用且有凭证的账号，逐个拉取 get-user-request-usage 近 31 天
 /// 分页明细，按日/按模型跨账号求和（31 天零填充）。聚合缓存 10 分钟；
 /// 单账号失败跳过（accounts_ok 计数），全部失败回退过期缓存（stale-on-error）。
+/// refresh=true 跳过缓存强制上游拉取（「刷新数据」按钮语义；缺省走 10min 缓存）。
+/// 注意：Tauri 参数名为 refresh，前端 invoke key 必须写 refresh。
 #[tauri::command(async)]
-pub fn buddy_ai_usage_official_all(state: State<'_, AppState>) -> Result<Value, String> {
-    buddy_ai_usage_official_all_impl(&state, false)
+pub fn buddy_ai_usage_official_all(
+    state: State<'_, AppState>,
+    refresh: Option<bool>,
+) -> Result<Value, String> {
+    buddy_ai_usage_official_all_impl(&state, refresh.unwrap_or(false))
 }
 
 pub(crate) fn buddy_ai_usage_official_all_impl(state: &AppState, force: bool) -> Result<Value, String> {
@@ -1793,6 +1798,7 @@ pub fn buddy_ai_sessions_query(
                 cache_write_tokens: 0,
                 preview: r.get("preview").and_then(Value::as_str).unwrap_or("").to_string(),
                 record_id: String::new(),
+                ..Default::default()
             });
         }
     }

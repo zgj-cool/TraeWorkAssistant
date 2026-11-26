@@ -122,6 +122,8 @@ dependencies = [
  "urlencoding",
  "uuid",
  "webpki-roots 0.26.11",
+ "webview2-com",
+ "windows 0.61.3",
  "windows-registry",
  "windows-sys 0.59.0",
 ]

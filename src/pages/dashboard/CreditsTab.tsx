@@ -12,6 +12,7 @@ import type {
   CreditsDailySnapshot,
   QoderCheckinRecord,
   QoderCreditsSnapshot,
+  QoderWebUsage,
   UsageHistoryResult,
   WbCheckinRecord,
   WbCreditsSnapshot,
@@ -25,6 +26,7 @@ import {
   qoderEarnedByDate,
   qoderEarnedByDateFiltered,
   qoderSnapshotsToPoints,
+  qoderWebToPoints,
   traeEarnedByDate,
   traeEarnedByDateFiltered,
   traeUsageToPoints,
@@ -41,10 +43,11 @@ import { buildModelTrend } from './modelTrend';
  * ① 总积分统计卡（区间总获得/区间总消耗/净获得）② 积分趋势图 ③ 各模型消耗趋势（issue #160）④ 年度活动热力图。
  * 三源口径（§8 页面内诚实标注，不做静默合并）：
  * 官网 = Trae usage_history（365 天，日×模型）+ Buddy usage_official（31 天，日合计；无按日模型明细，各模型趋势走空态）；
- * 本地 = WB 快照差分（365 天，日合计）+ Qoder 快照差分（365 天，日合计；官网无按日明细，作为网关源的降级回退）；
- * API 网关 = Trae/Buddy 池 usage_stats（90 天，请求数口径——api_usage 仅记 tokens 不记积分扣减，§3.1 决策）+
+ * 本地 = WB 快照差分（365 天，日合计）+ Qoder 快照差分（365 天，日合计；作为官网采集不可用时的降级回退）；
+ * API 网关 = Trae/Buddy 池 usage_stats（90 天，请求数口径——api_usage 仅记 tokens 不记积分扣减，§3.1 决策）+ 
  * Qoder 池（90 天，积分测量口径——网关从上游 usage.credits 提取实测值，issue #82 T2，仅覆盖走网关流量）。
- * Qoder 的消耗统计权威源为 API 网关（唯一可逐账号/逐模型分账的实测口径），页面默认选中网关源。
+ * Qoder 官网源 = Webview 同源 fetch 采集（31 天，日×模型；仅覆盖采集时登录的那个账号，多账号隔离待扩展）。
+ * Qoder 消耗统计优先级：官网采集 > API 网关测量 > 本地快照差分。
  */
 
 export default function CreditsTab({
@@ -58,6 +61,7 @@ export default function CreditsTab({
   wbCheckin,
   qoderSnapshots,
   qoderCheckin,
+  qoderWeb,
   gateway,
   uidSet,
 }: {
@@ -80,6 +84,8 @@ export default function CreditsTab({
   qoderSnapshots: QoderCreditsSnapshot[];
   /** Qoder 签到日志（账号筛选时 earned 按 uid 过滤 reward；与全局快照 earned 同源） */
   qoderCheckin: QoderCheckinRecord[];
+  /** Qoder 官网采集聚合（Webview 同源 fetch，31 天，日×模型；仅本机登录账号口径） */
+  qoderWeb: QoderWebUsage | null;
   /** API 网关 Trae/Buddy 池用量（90 天；网关源数据源） */
   gateway: GatewayDays | null;
   /** 分组∩账号筛选生效 uid 集（null = 不限；issue #82 问题4-1：获得积分 KPI 跟随筛选） */
@@ -108,10 +114,18 @@ export default function CreditsTab({
     () => (source === 'official' ? wbOfficialAllToPoints(wbOfficial) : wbFallbackToPoints(wbFallback)),
     [source, wbOfficial, wbFallback],
   );
-  // Qoder 本地快照差分（官网无按日明细，本地为唯一消耗来源；快照无模型粒度）
+  // Qoder 消耗：官网采集（official，日×模型）> 本地快照差分（local，日合计）；
+  // 网关源在 agg 的 isGateway 分支独立处理。官网采集仅覆盖采集时登录的那个账号。
   const qoderPoints = useMemo(
-    () => (qoderActive && source === 'local' ? qoderSnapshotsToPoints(qoderSnapshots) : []),
-    [qoderActive, source, qoderSnapshots],
+    () =>
+      !qoderActive
+        ? []
+        : source === 'official'
+          ? qoderWebToPoints(qoderWeb)
+          : source === 'local'
+            ? qoderSnapshotsToPoints(qoderSnapshots)
+            : [],
+    [qoderActive, source, qoderWeb, qoderSnapshots],
   );
 
   // ---- 模型清单（官网源 Trae 粒度 / 网关源模型计数；按累计降序）----
@@ -125,13 +139,22 @@ export default function CreditsTab({
       }
       return [...totals.entries()].sort((x, y) => y[1] - x[1]).map(([m]) => m);
     }
+    if (source === 'official' && qoderActive) {
+      const totals = new Map<string, number>();
+      for (const p of qoderPoints) {
+        for (const [model, m] of Object.entries(p.models)) {
+          totals.set(model, (totals.get(model) ?? 0) + (m.credits ?? 0));
+        }
+      }
+      return [...totals.entries()].sort((x, y) => y[1] - x[1]).map(([m]) => m);
+    }
     if (source === 'gateway') {
       const pools = scope === 'trae' ? (gateway?.trae ?? []) : scope === 'buddy' ? (gateway?.buddy ?? []) : (gateway?.qoder ?? []);
       // Qoder 网关积分口径：按测量积分排序模型清单；其余池按请求数
       return [...new Set(pools.flatMap((d) => (isGatewayCredits ? d.models.filter((m) => m.credits > 0) : d.models).map((m) => m.name)))].sort();
     }
     return [];
-  }, [source, traeActive, traePoints, gateway, scope, isGatewayCredits]);
+  }, [source, traeActive, qoderActive, traePoints, qoderPoints, gateway, scope, isGatewayCredits]);
 
   // ---- 范围 × 模型 × 平台 聚合 ----
   const agg = useMemo(() => {
@@ -239,7 +262,17 @@ export default function CreditsTab({
           if (inRange(d)) consumeEarned(d, v);
         }
       }
-      // Qoder 消耗：本地快照差分日合计（官网无按日明细；模型筛选时不计入，保持口径诚实）
+      // Qoder 官网采集源：日 × 模型粒度（模型筛选仅作用于消耗合计线）
+      if (qoderActive && source === 'official') {
+        for (const p of qoderPoints) {
+          if (!inRange(p.date)) continue;
+          addConsume(p.date, modelFilter ? (p.models[modelFilter]?.credits ?? 0) : (p.credits ?? 0));
+          for (const [model, m] of Object.entries(p.models)) {
+            addModelDay(p.date, model, m.credits ?? 0);
+          }
+        }
+      }
+      // Qoder 消耗：本地快照差分日合计（无模型粒度；模型筛选时不计入，保持口径诚实）
       if (qoderActive && source === 'local' && !modelFilter) {
         for (const p of qoderPoints) {
           if (!inRange(p.date)) continue;
@@ -289,7 +322,8 @@ export default function CreditsTab({
   // ---- 各模型消耗趋势（issue #160：日 × 模型折线，Top8 + 其他聚合）----
   // 仅日×模型粒度可用的源渲染：官网源 Trae / 网关源；Buddy 官网（仅 31 天全窗口汇总）与
   // 本地源（快照差分无模型明细）走诚实空态。恒为全模型，不随模型筛选联动。
-  const hasModelDaily = isGateway || (traeActive && source === 'official');
+  const hasModelDaily =
+    isGateway || (traeActive && source === 'official') || (qoderActive && source === 'official');
   const modelTrend = useMemo(
     () => buildModelTrend(agg.modelByDate, dateList, range),
     [agg.modelByDate, dateList, range],

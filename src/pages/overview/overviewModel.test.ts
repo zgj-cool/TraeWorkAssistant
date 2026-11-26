@@ -5,6 +5,7 @@ import {
   summarizeBuddy,
   summarizeCreditUsage,
   summarizeGatewayTokens,
+  qoderUsedByUid,
   summarizeQoder,
   summarizeTrae,
   type OverviewData,
@@ -161,6 +162,80 @@ describe('summarizeBuddy', () => {
     expect(withOfficial.alertAccounts).toBe(2);
     expect(withOfficial.expiringDetails).toHaveLength(1);
     expect(withOfficial.expiringDetails[0].credits).toBe(30);
+  });
+});
+
+describe('qoderUsedByUid 三源优先级', () => {
+  it('官网采集 > 网关实测 > 快照差分，且 KPI 与明细同源', () => {
+    const data = emptyData();
+    const today = '2026-11-19';
+    data.qoderAccounts = [
+      { id: 'q1', nickname: '甲' },
+      { id: 'q2', nickname: '乙' },
+      { id: 'q3', nickname: '丙' },
+    ] as QoderAccountView[];
+    data.qoderWeb = {
+      status: 'complete',
+      source: 'official_web',
+      fetched_at_ms: 0,
+      range_start: today,
+      range_end: today,
+      records_total: 1,
+      billed_total: 1,
+      summary: { usage_today: 10, usage_7days: 10, usage_this_month: 10 },
+      daily: [],
+      models: [],
+      accounts: [
+        {
+          account_id: 'q1',
+          account_name: '甲',
+          fetched_at_ms: 0,
+          range_start: today,
+          range_end: today,
+          records_total: 1,
+          billed_total: 1,
+          summary: { usage_today: 10, usage_7days: 10, usage_this_month: 10 },
+        },
+      ],
+    };
+    data.gwUsage = {
+      qoder: [
+        {
+          date: today,
+          credits: 5,
+          total_requests: 0,
+          ok: 0,
+          errors: 0,
+          prompt_tokens: 0,
+          completion_tokens: 0,
+          models: [],
+          accounts: [
+            { name: 'q1', credits: 9 },
+            { name: 'q2', credits: 5 },
+          ],
+        } as any,
+      ],
+    };
+    data.qoderSnapshots = [
+      { date: '2026-11-18', consumed: null, total_balance: 300, ts: 0, accounts: [{ user_id: 'q3', total: 300 }] },
+      { date: today, consumed: null, total_balance: 280, ts: 0, accounts: [{ user_id: 'q3', total: 280 }] },
+    ] as any;
+
+    const used = qoderUsedByUid(data, today);
+    // q1 官网优先（不取网关 9）；q2 回退网关；q3 回退快照差分（300-280）
+    expect(used.get('q1')).toEqual({ credits: 10, source: '官网采集（逐账号）' });
+    expect(used.get('q2')).toEqual({ credits: 5, source: 'API 网关实测积分' });
+    expect(used.get('q3')?.credits).toBe(20);
+
+    const view = buildOverview(data);
+    const qoder = view.platforms.find((p) => p.key === 'qoder')!;
+    expect(qoder.usedToday).toBe(35);
+    expect(qoder.notes[0]).toContain('官网采集 1/3 账号');
+    const rows = view.credits.rows.filter((r) => r.platform === 'qoder');
+    expect(rows.find((r) => r.uid === 'q1')?.credits).toBe(10);
+    expect(rows.find((r) => r.uid === 'q2')?.credits).toBe(5);
+    expect(rows.find((r) => r.uid === 'q3')?.credits).toBe(20);
+    expect(view.credits.total).toBe(35);
   });
 });
 
