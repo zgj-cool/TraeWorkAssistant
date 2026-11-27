@@ -1,4 +1,5 @@
 import { type ReactNode, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 import { cn } from '../lib/cn';
 
@@ -131,10 +132,13 @@ export function Modal({
   }, [open, onClose]);
 
   if (!open) return null;
-  return (
+  // portal 到 body：Modal 常在 sidebar 等容器内调用，而任何带 filter / backdrop-filter /
+  // transform / contain 的祖先都会为 position:fixed 后代建立包含块——弹窗的 inset-0
+  // 会退化成「相对该祖先定位」，表现为弹窗被挤到侧栏里。挂到 body 从根上免疫。
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-slate-950/35 backdrop-blur-[3px] dark:bg-black/60" onClick={onClose} />
-      <div className={`card relative z-10 w-full bg-white dark:bg-zinc-900 ${widthClass ?? (size === '2xl' ? 'max-w-[78rem]' : size === 'xl' ? 'max-w-4xl' : size === 'lg' ? 'max-w-2xl' : 'max-w-lg')} animate-pop-in p-5 shadow-soft-lg`} role="dialog" aria-modal="true">
+      <div className="modal-scrim absolute inset-0 bg-slate-950/35 backdrop-blur-[3px] dark:bg-black/60" onClick={onClose} />
+      <div className={`modal-panel card relative z-10 w-full bg-white dark:bg-zinc-900 ${widthClass ?? (size === '2xl' ? 'max-w-[78rem]' : size === 'xl' ? 'max-w-4xl' : size === 'lg' ? 'max-w-2xl' : 'max-w-lg')} animate-pop-in p-5 shadow-soft-lg`} role="dialog" aria-modal="true">
         <div className="mb-3.5 flex items-center justify-between gap-3">
           <h3 className="text-[15px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">
             {title}
@@ -148,7 +152,8 @@ export function Modal({
         </div>
         {footer && <div className="mt-5 flex justify-end gap-2">{footer}</div>}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

@@ -65,7 +65,7 @@ export default function TitleBar() {
 
   return (
     <>
-      <div className="flex h-10 shrink-0 items-center justify-between border-b border-slate-200/70 bg-white pl-3 pr-1 dark:border-zinc-800/70 dark:bg-zinc-950">
+      <div className="app-titlebar flex h-10 shrink-0 items-center justify-between border-b border-slate-200/70 bg-white pl-3 pr-1 dark:border-zinc-800/70 dark:bg-zinc-950">
         <div data-tauri-drag-region className="flex flex-1 items-center gap-2">
           <BrandMark size={22} iconSize={13} />
           <span className="text-[13px] font-semibold tracking-[-0.01em] text-slate-800 dark:text-zinc-100">

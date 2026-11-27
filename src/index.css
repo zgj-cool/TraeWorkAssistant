@@ -89,6 +89,28 @@ html.dark[data-theme='tech-blue'] {
   --c-zinc-100: 194 217 250;
 }
 
+/* 液态玻璃（深色）：极夜冷调底 + 青绿折射光。基色维持 zinc-950（#09090b），
+   与 Rust splash_background / index.html 首屏骨架同色，避免启动跳色；
+   玻璃质感全部靠「叠加层 + 表面透明度」表达，不移动任何布局尺寸。 */
+html.dark[data-theme='liquid-glass'] {
+  color-scheme: dark;
+  --c-zinc-950: 9 9 11;
+  --c-zinc-900: 14 20 27;
+  --c-zinc-800: 21 30 41;
+  --c-zinc-700: 36 49 65;
+  --c-zinc-200: 214 236 241;
+  --c-zinc-100: 232 247 250;
+
+  /* 玻璃专用令牌：表面 / 高光 / 强调色 */
+  --glass-surface: 255 255 255;
+  --glass-accent: 111 242 221; /* 液态青 */
+  --glass-accent-2: 122 162 255; /* 冷水蓝 */
+
+  /* 玻璃面板更圆一档，边缘高光才顺 */
+  --radius-card: 16px;
+  --radius-control: 10px;
+}
+
 html,
 body,
 #root {
@@ -266,5 +288,324 @@ html.dark a:focus-visible {
   .splash-bar > i {
     width: 100%;
     opacity: 0.4;
+  }
+}
+
+/* ==========================================================================
+   液态玻璃主题（第 7 套 · liquid-glass）
+   --------------------------------------------------------------------------
+   结构分三层，缺一层就会退化成「半透明黑卡片」：
+     ① 折射底：极夜里缓慢漂移的青绿 / 冰蓝光体（body::before）
+     ② 颗粒层：细噪点覆盖，消除大面积渐变的塑料感（body::after）
+     ③ 玻璃面：半透渐变 + 内缘高光 + 外缘冷投影（顶栏/侧栏再叠 backdrop-blur）
+   所有规则写在 @layer 之外：无层级样式恒优先于 Tailwind 工具类，
+   因此无需 !important 即可压过组件里写死的 dark:bg-zinc-950 等类名。
+   模糊只给顶栏与侧栏这类「少量固定块」；卡片与表格行一律不模糊——
+   WebView2 上每个模糊面都是独立离屏图层，背后极光又在动，几十张卡片会直接掉帧。
+   卡片靠半透 + 渐变 + 高光边表达玻璃，肉眼效果相同而开销接近零。
+   ========================================================================== */
+
+html[data-theme='liquid-glass'] {
+  /* html 铺底色、body 透明：负 z-index 的极光层才能落在两者之间 */
+  background-color: #09090b;
+}
+
+html[data-theme='liquid-glass'] body {
+  background: transparent;
+  color: #d6ecf1;
+}
+
+@keyframes glass-drift {
+  0% {
+    transform: translate3d(-1.5%, -1%, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(1.5%, 1.5%, 0) scale(1.06);
+  }
+  100% {
+    transform: translate3d(-0.5%, 2%, 0) scale(1.02);
+  }
+}
+
+/* ① 折射底：大半径径向渐变本身就是柔和的，不再叠 filter:blur——
+   全屏动画元素每帧重算一次高斯模糊，在核显 WebView2 上会明显掉帧。
+   inset 只放大 8%：光体坐标才和视口对得上（放大越多，百分比越容易被稀释）。
+   三个光体分别压在内容区上/中/下，卡片才有「背后有光」的透亮感。 */
+html[data-theme='liquid-glass'] body::before {
+  content: '';
+  position: fixed;
+  inset: -8%;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(46% 40% at 56% 22%, rgb(var(--glass-accent) / 0.34), transparent 70%),
+    radial-gradient(40% 42% at 92% 58%, rgb(var(--glass-accent-2) / 0.3), transparent 72%),
+    radial-gradient(52% 44% at 48% 88%, rgba(14, 104, 98, 0.4), transparent 72%),
+    radial-gradient(34% 34% at 22% 76%, rgba(48, 76, 148, 0.28), transparent 74%);
+  animation: glass-drift 34s ease-in-out infinite alternate;
+}
+
+/* ② 颗粒层（tile 噪点，单次栅格化后平铺，几乎零成本） */
+html[data-theme='liquid-glass'] body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  opacity: 0.42;
+  mix-blend-mode: soft-light;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23n)' opacity='0.55'/%3E%3C/svg%3E");
+  background-size: 180px 180px;
+}
+
+/* 外壳透明，让极光透上来 */
+html[data-theme='liquid-glass'] .app-shell {
+  background: transparent;
+}
+
+/* ③ 玻璃面 —— 顶栏 / 标题栏：厚玻璃（28px 模糊 + 200% 饱和是液态玻璃的关键，
+   饱和度拉高后背后极光的青色才会被「吸」进玻璃里，单纯模糊只会发灰） */
+html[data-theme='liquid-glass'] .app-titlebar,
+html[data-theme='liquid-glass'] .app-topbar {
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.085) 0%, rgba(255, 255, 255, 0) 58%),
+    rgba(8, 13, 18, 0.62);
+  border-color: rgba(255, 255, 255, 0.11);
+  backdrop-filter: blur(28px) saturate(185%);
+  -webkit-backdrop-filter: blur(28px) saturate(185%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.26),
+    inset 0 -1px 1px rgba(255, 255, 255, 0.08);
+}
+
+/* 标题栏下沿的一线冷光：玻璃边缘被光「切」开的感觉 */
+html[data-theme='liquid-glass'] .app-titlebar {
+  border-bottom-color: rgb(var(--glass-accent) / 0.24);
+}
+
+html[data-theme='liquid-glass'] .app-sidebar {
+  background:
+    linear-gradient(200deg, rgba(255, 255, 255, 0.1) 0%, rgba(255, 255, 255, 0) 52%),
+    rgba(9, 14, 20, 0.52);
+  border-right-color: rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(28px) saturate(185%);
+  -webkit-backdrop-filter: blur(28px) saturate(185%);
+  box-shadow:
+    inset 1px 0 0 rgba(255, 255, 255, 0.14),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+}
+
+/* 卡片：参考稿的 135° 高光渐变 + 上缘强高光 + 下缘弱高光保留，
+   但白色基底压到很低并垫一层深底：参考稿是「深色字压浅色玻璃」，
+   本主题是「浅色字压深色玻璃」，白色基底过量会把极光洗成灰白、
+   整片界面发灰发亮，反而丢掉玻璃的通透感。
+   外投影刻意压得很轻：玻璃靠「边缘高光 + 背后透光」立起来，重阴影会把它压成
+   普通卡片。用 -8px 的负扩散把投影收在卡片脚下，避免整屏发浑。 */
+html[data-theme='liquid-glass'] .card {
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.115) 0%, rgba(255, 255, 255, 0) 55%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.026), rgba(255, 255, 255, 0.008)),
+    rgba(6, 10, 15, 0.62);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.36),
+    inset 0 -1px 1px rgba(255, 255, 255, 0.09),
+    0 8px 20px -10px rgba(4, 7, 11, 0.42);
+}
+
+html[data-theme='liquid-glass'] .card-hover:hover {
+  border-color: rgb(var(--glass-accent) / 0.3);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.4),
+    0 12px 28px -12px rgba(4, 7, 11, 0.5),
+    0 8px 24px -14px rgb(var(--glass-accent) / 0.16);
+}
+
+/* 弹窗：真正撑得起 28px 模糊的场景只剩这里——一屏只有一个，模糊开销可忽略，
+   而且必须让「背后的列表被糊掉」才有玻璃悬浮在界面之上的空间感。
+   遮罩同步加深：模糊不加深压暗，底层内容会透成一片灰雾。 */
+html[data-theme='liquid-glass'] .modal-scrim {
+  background: rgba(2, 5, 8, 0.52);
+  backdrop-filter: blur(14px) saturate(120%);
+  -webkit-backdrop-filter: blur(14px) saturate(120%);
+}
+
+/* 弹窗面板：真正撑得起 28px 模糊的场景只剩这里——一屏只有一个，模糊开销可忽略，
+   而且必须让「背后的列表被糊掉」才有玻璃悬浮在界面之上的空间感。
+   表面比参考稿多垫一层暗底：参考稿是「深字压浅玻璃」，这里沿用深色主题的浅字，
+   纯白玻璃会让正文与底色同为浅灰、字浮不起来。暗底只压到刚好托住文字。
+   作用域用 .modal-panel 而非 [role=dialog]——设置面板里的图标选择弹窗尺寸很小，
+   套同一套厚玻璃会糊成白块。 */
+html[data-theme='liquid-glass'] .modal-panel {
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.2) 0%, rgba(255, 255, 255, 0) 55%),
+    rgba(7, 12, 18, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  backdrop-filter: blur(28px) saturate(185%);
+  -webkit-backdrop-filter: blur(28px) saturate(185%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.46),
+    inset 0 -1px 1px rgba(255, 255, 255, 0.14),
+    0 14px 36px -14px rgba(0, 0, 0, 0.62);
+}
+
+/* 弹窗里的卡片是一层「嵌在玻璃里的玻璃」，白度必须压下去，否则层层叠加会糊成白块 */
+html[data-theme='liquid-glass'] .modal-panel .card {
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.075) 0%, rgba(255, 255, 255, 0) 55%),
+    rgba(255, 255, 255, 0.028);
+  border-color: rgba(255, 255, 255, 0.12);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    0 6px 16px -8px rgba(0, 0, 0, 0.5);
+}
+
+/* 弹窗内的输入框：玻璃面板已是浅色，输入槽保持深色才有「凹进去」的层次 */
+html[data-theme='liquid-glass'] .modal-panel .input {
+  background: rgba(4, 9, 14, 0.55);
+  border-color: rgba(255, 255, 255, 0.22);
+}
+
+/* 弹窗内表格表头：深色主题的 zinc 表头压在浅玻璃上会脏，改成极淡的白色雾面 */
+html[data-theme='liquid-glass'] .modal-panel thead {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+/* 按钮：主按钮是「发光液态胶囊」，其余是薄玻璃 */
+html[data-theme='liquid-glass'] .btn-primary {
+  background: linear-gradient(135deg, rgb(var(--glass-accent) / 0.92), rgb(var(--glass-accent-2) / 0.82));
+  color: #04100f;
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.5),
+    0 8px 22px -10px rgb(var(--glass-accent) / 0.5);
+  font-weight: 600;
+}
+
+html[data-theme='liquid-glass'] .btn-primary:hover {
+  background: linear-gradient(135deg, rgb(var(--glass-accent) / 1), rgb(var(--glass-accent-2) / 0.92));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.62),
+    0 10px 26px -8px rgb(var(--glass-accent) / 0.62);
+}
+
+html[data-theme='liquid-glass'] .btn-outline {
+  background: rgba(255, 255, 255, 0.03);
+  border-color: rgba(255, 255, 255, 0.09);
+  color: #c3dde4;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+html[data-theme='liquid-glass'] .btn-outline:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgb(var(--glass-accent) / 0.3);
+}
+
+html[data-theme='liquid-glass'] .btn-ghost {
+  color: rgba(195, 221, 228, 0.72);
+}
+
+html[data-theme='liquid-glass'] .btn-ghost:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: #eafcff;
+}
+
+/* 输入类控件：内凹玻璃槽，聚焦时泛青光 */
+html[data-theme='liquid-glass'] .input {
+  background: rgba(4, 8, 11, 0.5);
+  border-color: rgba(255, 255, 255, 0.11);
+  color: #eafcff;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.55);
+}
+
+html[data-theme='liquid-glass'] .input:focus {
+  border-color: rgb(var(--glass-accent) / 0.55);
+  box-shadow:
+    inset 0 1px 2px rgba(0, 0, 0, 0.5),
+    0 0 0 3px rgb(var(--glass-accent) / 0.15);
+}
+
+html[data-theme='liquid-glass'] .input::placeholder {
+  color: rgba(214, 236, 241, 0.34);
+}
+
+/* 分段控件的选中胶囊：被托起来的那一小块玻璃 */
+html[data-theme='liquid-glass'] [aria-pressed='true'] {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.032));
+  color: #f2ffff;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    0 2px 8px -2px rgba(0, 0, 0, 0.7);
+}
+
+/* 表头：一层极薄的雾面玻璃，数据行保持纯透明以保证长表滚动性能。
+   选择器必须带 `.app-main`（b=2）才压得过页面里写死的 `dark:bg-zinc-900/40`。 */
+html[data-theme='liquid-glass'] .app-main thead {
+  background: rgba(255, 255, 255, 0.022);
+  border-color: rgba(255, 255, 255, 0.06);
+}
+
+html[data-theme='liquid-glass'] .app-main .row-hover:hover {
+  background: rgb(var(--glass-accent) / 0.045);
+}
+
+/* 左下角应用格子：内凹的玻璃槽，选中项是一块被推亮的薄玻璃 */
+html[data-theme='liquid-glass'] .app-tabbar {
+  background: rgba(255, 255, 255, 0.024);
+  box-shadow:
+    inset 0 1px 2px rgba(0, 0, 0, 0.6),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.04);
+}
+
+html[data-theme='liquid-glass'] .app-tabbar [data-tab-active] {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.11), rgba(255, 255, 255, 0.04));
+  color: #f2ffff;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.2),
+    0 2px 10px -3px rgb(var(--glass-accent) / 0.28);
+}
+
+/* 侧栏选中项：青光渗进玻璃边 */
+html[data-theme='liquid-glass'] .app-sidebar [data-nav-active] {
+  background: linear-gradient(
+    90deg,
+    rgb(var(--glass-accent) / 0.13),
+    rgb(var(--glass-accent) / 0.04) 62%,
+    transparent
+  );
+  color: #f2ffff;
+}
+
+html[data-theme='liquid-glass'] .nav-indicator {
+  background: linear-gradient(180deg, rgb(var(--glass-accent) / 1), rgb(var(--glass-accent-2) / 0.85));
+  box-shadow: 0 0 10px rgb(var(--glass-accent) / 0.7);
+}
+
+html[data-theme='liquid-glass'] .chip {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+/* 滚动条：冷凝水滴 */
+html[data-theme='liquid-glass'] ::-webkit-scrollbar-thumb {
+  background: rgba(150, 205, 214, 0.32);
+}
+
+html[data-theme='liquid-glass'] ::-webkit-scrollbar-thumb:hover {
+  background: rgba(150, 205, 214, 0.58);
+}
+
+html[data-theme='liquid-glass'] ::selection {
+  background: rgb(var(--glass-accent) / 0.26);
+  color: #f2ffff;
+}
+
+html[data-theme='liquid-glass'] button:focus-visible,
+html[data-theme='liquid-glass'] a:focus-visible {
+  outline-color: rgb(var(--glass-accent) / 0.62);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-theme='liquid-glass'] body::before {
+    animation: none;
   }
 }

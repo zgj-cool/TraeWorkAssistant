@@ -1,4 +1,5 @@
 import type { CSSProperties } from 'react';
+import { useEffect, useState } from 'react';
 import { useIsDark } from './useIsDark';
 
 /**
@@ -46,7 +47,8 @@ export interface ChartTheme {
   heat: { empty: string; levels: string[] };
 }
 
-export function chartTheme(isDark: boolean): ChartTheme {
+export function chartTheme(isDark: boolean, themeId?: string): ChartTheme {
+  if (themeId === 'liquid-glass') return glassTheme();
   return isDark
     ? {
         isDark,
@@ -115,9 +117,66 @@ export function chartTheme(isDark: boolean): ChartTheme {
       };
 }
 
-/** 组件内取样式（浅深色自动跟随） */
+/**
+ * 液态玻璃专用配色：青绿 → 冰蓝的冷色渐变序列，替换默认的「暖铜强调 + 墨阶」。
+ * 深色玻璃底上暖铜会显脏，冷色系才有折射感；首项仍是最亮的强调色，
+ * 保持「Top1 自然成为焦点」的既有读图逻辑。tooltip 走半透明玻璃表面。
+ */
+function glassTheme(): ChartTheme {
+  return {
+    isDark: true,
+    grid: 'rgba(255,255,255,0.07)',
+    axisLine: 'rgba(255,255,255,0.09)',
+    axisTick: 'rgba(214,236,241,0.55)',
+    cursor: 'rgba(111,242,221,0.28)',
+    tooltip: {
+      fontSize: 12,
+      borderRadius: 12,
+      border: '1px solid rgba(255,255,255,0.14)',
+      background: 'rgba(12,20,27,0.92)',
+      color: '#eafcff',
+      boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.14), 0 18px 40px -18px rgba(0,0,0,0.9)',
+      padding: '8px 12px',
+      backdropFilter: 'blur(14px)',
+    } as CSSProperties,
+    accent: '#6ff2dd',
+    accentSoft: '#7aa2ff',
+    ink: '#d6ecf1',
+    inkSoft: 'rgba(214,236,241,0.55)',
+    ramp: ['#6ff2dd', '#7aa2ff', '#a8e6f0', '#6f9fd8', '#8fd0d8', '#5c7fa8'],
+    rest: 'rgba(214,236,241,0.22)',
+    stack: {
+      cache_write: 'rgba(214,236,241,0.28)',
+      cache_read: 'rgba(214,236,241,0.46)',
+      new_input: '#7aa2ff',
+      output: '#6ff2dd',
+    },
+    heat: {
+      empty: 'rgba(255,255,255,0.05)',
+      levels: [
+        'rgba(111,242,221,0.2)',
+        'rgba(111,242,221,0.4)',
+        'rgba(111,242,221,0.62)',
+        'rgba(111,242,221,0.88)',
+      ],
+    },
+  };
+}
+
+/** 组件内取样式（浅深色 + 主题 id 自动跟随） */
 export function useChartTheme(): ChartTheme {
-  return chartTheme(useIsDark());
+  const isDark = useIsDark();
+  const [themeId, setThemeId] = useState(
+    typeof document !== 'undefined' ? document.documentElement.dataset.theme : undefined,
+  );
+  useEffect(() => {
+    const observer = new MutationObserver(() => {
+      setThemeId(document.documentElement.dataset.theme);
+    });
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+    return () => observer.disconnect();
+  }, []);
+  return chartTheme(isDark, themeId);
 }
 
 /** 公共坐标轴属性（recharts XAxis / YAxis 展开用） */

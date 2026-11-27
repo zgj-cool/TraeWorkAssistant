@@ -14,6 +14,7 @@ export const THEMES: ThemeDef[] = [
   { id: 'ink-green', name: '墨绿', dark: true },
   { id: 'amber-night', name: '琥珀暖夜', dark: true },
   { id: 'tech-blue', name: '科技蓝', dark: true },
+  { id: 'liquid-glass', name: '液态玻璃', dark: true },
 ];
 
 export const DEFAULT_THEME = 'charcoal';

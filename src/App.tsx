@@ -150,7 +150,7 @@ export default function App() {
   return (
     // 不加淡入动画：启动页 → 主界面时 opacity 从 0 起跳会让窗口底色透出一帧
     // （深色主题下即黑闪）。两屏底色一致，直接硬切不可见。
-    <div className="flex h-full flex-col bg-slate-50 text-slate-800 dark:bg-zinc-950 dark:text-zinc-100">
+    <div className="app-shell flex h-full flex-col bg-slate-50 text-slate-800 dark:bg-zinc-950 dark:text-zinc-100">
       <TitleBar />
       {/* issue #152：横向滚动容器。视口 < --app-min-width 时内容行整体滚动，不再挤压布局 */}
       <div className="min-h-0 flex-1 overflow-x-auto">
@@ -158,7 +158,7 @@ export default function App() {
           <Sidebar view={view} onNav={setView} />
           <main className="relative flex min-w-0 flex-1 flex-col">
             <TopBar />
-            <div className="relative min-h-0 flex-1 overflow-auto p-6">{renderView(view)}</div>
+            <div className="app-main relative min-h-0 flex-1 overflow-auto p-6">{renderView(view)}</div>
           </main>
         </div>
       </div>

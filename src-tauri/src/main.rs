@@ -462,7 +462,8 @@ fn show_main_window(app: &tauri::AppHandle) {
 fn splash_prefers_dark(theme: &str) -> bool {
     match theme.trim() {
         "graphite" | "light" => false,
-        "charcoal" | "dark" | "violet-night" | "ink-green" | "amber-night" | "tech-blue" => true,
+        "charcoal" | "dark" | "violet-night" | "ink-green" | "amber-night" | "tech-blue"
+        | "liquid-glass" => true,
         "" | "system" => system_prefers_dark(),
         _ => true,
     }

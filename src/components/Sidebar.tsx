@@ -161,7 +161,7 @@ export default function Sidebar({
   };
 
   return (
-    <aside className="sticky left-0 z-10 flex w-52 shrink-0 flex-col border-r border-slate-200/70 bg-white dark:border-zinc-800/70 dark:bg-zinc-900/30">
+    <aside className="app-sidebar sticky left-0 z-10 flex w-52 shrink-0 flex-col border-r border-slate-200/70 bg-white dark:border-zinc-800/70 dark:bg-zinc-900/30">
       <nav className="flex-1 space-y-0.5 p-3">
         {/* 跨平台总览：常驻顶部，不随应用 Tab 切换 */}
         <NavButton
@@ -186,7 +186,7 @@ export default function Sidebar({
       <div className="border-t border-slate-200/70 p-3 dark:border-zinc-800/70">
         <div
           className={cn(
-            'grid gap-1 rounded-[10px] bg-slate-100/80 p-1 dark:bg-zinc-800/50',
+            'app-tabbar grid gap-1 rounded-[10px] bg-slate-100/80 p-1 dark:bg-zinc-800/50',
             GRID_COLS[tabCols - 1] ?? 'grid-cols-4',
           )}
         >
@@ -200,6 +200,7 @@ export default function Sidebar({
                 disabled={tab.disabled}
                 onClick={() => setActiveApp(tab.key)}
                 title={tab.title ?? tab.label}
+                data-tab-active={active || undefined}
                 className={cn(
                   'flex flex-col items-center gap-0.5 rounded-md px-1 py-1.5 text-[11px] font-medium transition active:scale-[0.97]',
                   tab.disabled && 'cursor-not-allowed opacity-40',
@@ -286,6 +287,7 @@ function NavButton({
     <button
       onClick={onClick}
       title={title}
+      data-nav-active={active || undefined}
       className={cn(
         'relative flex w-full items-center gap-2.5 rounded-[10px] py-2 pl-3.5 pr-3 text-[13px] font-medium transition-colors',
         active
@@ -294,7 +296,7 @@ function NavButton({
       )}
     >
       {active && (
-        <span className="absolute left-0 top-1/2 h-4 w-[3px] -translate-y-1/2 rounded-r-full bg-zinc-900 dark:bg-zinc-100" />
+        <span className="nav-indicator absolute left-0 top-1/2 h-4 w-[3px] -translate-y-1/2 rounded-r-full bg-zinc-900 dark:bg-zinc-100" />
       )}
       <Icon size={16} />
       {label}

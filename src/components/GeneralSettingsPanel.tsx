@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Save, RotateCcw, Bell, Send, GripVertical } from 'lucide-react';
 import { useAppStore } from '../store';
 import { withMinDelay } from '../lib/delay';
@@ -388,7 +389,7 @@ export default function GeneralSettingsPanel() {
             const tab = APP_TABS.find((t) => t.key === iconPickerFor)!;
             const customizedName = form.app_icons[tab.key];
             const selectedName = customizedName;
-            return (
+            return createPortal(
               <div
                 className="fixed inset-0 z-[60] flex items-center justify-center p-4"
                 onClick={() => setIconPickerFor(null)}
@@ -449,7 +450,8 @@ export default function GeneralSettingsPanel() {
                     </button>
                   </div>
                 </div>
-              </div>
+              </div>,
+              document.body,
             );
           })()
         : null}
