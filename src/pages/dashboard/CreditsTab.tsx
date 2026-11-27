@@ -278,7 +278,7 @@ export default function CreditsTab({
             {qoderActive && qoderWeb && (
               <Badge
                 tone="green"
-                title="Qoder 官网采集（Webview 同源 fetch，名义消耗 original_credits）；仅覆盖已采集账号。"
+                title="Qoder 官网采集（Webview 同源 fetch，实际扣费 credits，免费模型为 0）；仅覆盖已采集账号。"
               >
                 口径 = 官网采集
               </Badge>

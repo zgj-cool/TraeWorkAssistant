@@ -186,7 +186,7 @@ flowchart LR
 ```powershell
 npm install
 npm run tauri dev      # 开发模式
-npm run tauri build    # 打包（msi + nsis）
+npm run tauri build    # 打包（msi + nsis）；Cargo 默认串行编译，避免大项目构建内存不足
 node scripts/rename_release.mjs     # 安装包统一输出到 release/，命名 AI Work 助手_<版本>_x64*
 node scripts/package_portable.mjs   # 便携版 zip（AI Work 助手_<版本>_x64_portable.zip）
 ```

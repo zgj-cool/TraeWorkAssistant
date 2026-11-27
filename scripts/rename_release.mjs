@@ -1,13 +1,15 @@
 #!/usr/bin/env node
-/** 打包产物统一命名：把 `npm run tauri build` 产出的安装包复制到 release/，
- * 统一使用中文产品名命名（APP 名称标识）。
+/** 打包产物统一命名 / 发布清单生成：
+ * `npm run tauri build` 现在通过 beforeBundleCommand 直接把 MSI + NSIS 写到 release/；
+ * 本脚本仍兼容旧版「产物在 target/release/bundle/」的布局（缺失时才复制），
+ * 并统一生成 latest.json 校验清单。
  *
  * 用法：node scripts/rename_release.mjs [--strict]
  *   --strict  任一产物缺失时以非零码退出（默认仅告警）
  *   src-tauri/target/release/bundle/nsis/AI Work 助手_<ver>_x64-setup.exe
- *       → release/AI Work 助手_<ver>_x64-setup.exe
+ *       → release/AI Work 助手_<ver>_x64-setup.exe（已直出时跳过复制）
  *   src-tauri/target/release/bundle/msi/AI Work 助手_<ver>_x64_zh-CN.msi
- *       → release/AI Work 助手_<ver>_x64_zh-CN.msi
+ *       → release/AI Work 助手_<ver>_x64_zh-CN.msi（已直出时跳过复制）
  *   portable zip 由 package_portable.mjs 直接生成同名（无需重命名）。
  */
 import { createHash } from 'node:crypto';
@@ -16,6 +18,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   writeFileSync,
 } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -64,8 +67,11 @@ let moved = 0;
 const missing = [];
 for (const [src, dst] of jobs) {
   if (existsSync(src)) {
-    copyFileSync(src, dst);
-    console.log('OK:', dst);
+    // beforeBundleCommand 已把 bundle/<type> 建为 release/ 的 junction：
+    // 此时 src 与 dst 是同一文件，不能再 copyFileSync（Windows 会报 EINVAL）。
+    const alreadyThere = existsSync(dst) && realpathSync(src) === realpathSync(dst);
+    if (!alreadyThere) copyFileSync(src, dst);
+    console.log(alreadyThere ? 'OK（已直接输出到 release）:' : 'OK:', dst);
     moved++;
   } else {
     console.error('SKIP（不存在）:', src);

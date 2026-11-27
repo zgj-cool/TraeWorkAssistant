@@ -8,8 +8,9 @@
 //! Chromium Cookies 库读取：Local State.os_crypt.encrypted_key → DPAPI →
 //! AES-256-GCM（v10）解密。全程零 cookie/token 输出，失败只回可读原因。
 //!
-//! 口径：`original_credits` 名义消耗（用于「今日已用」），`credits` 实际扣费；
-//! 按 `begin_at` 的本地自然日聚合。任一页失败 / 字段缺失 → ok=false，调用方回退快照。
+//! 口径：**实际扣费** `credits`（免费模型上游下发 0，不得按原价虚增），
+//! `credits` 缺失时回退 `original_credits`；按 `begin_at` 的本地自然日聚合。
+//! 任一页失败 / 字段缺失 → ok=false，调用方回退快照。
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -203,8 +204,8 @@ fn record_is_today(v: &Value, today: &str) -> bool {
     s.len() >= 10 && &s[..10] == today
 }
 
-/// 单页响应 → (当日名义消耗, 当日实际扣费, 记录数, 是否还有下一页)
-fn parse_page(body: &Value, today: &str) -> Result<(f64, f64, usize, bool), String> {
+/// 单页响应 → (当日实际扣费, 记录数, 是否还有下一页)
+fn parse_page(body: &Value, today: &str) -> Result<(f64, usize, bool), String> {
     let data = fs_utils::dig(body, &["data"])
         .and_then(Value::as_array)
         .ok_or("响应缺 data 数组")?;
@@ -212,22 +213,24 @@ fn parse_page(body: &Value, today: &str) -> Result<(f64, f64, usize, bool), Stri
         return Err("响应缺 page_result".into());
     }
     let mut used = 0.0;
-    let mut billed = 0.0;
     for rec in data {
         let begin = fs_utils::dig(rec, &["begin_at", "beginAt"]);
         let original = fs_utils::dig(rec, &["original_credits", "originalCredits"]);
         let credits = fs_utils::dig(rec, &["credits", "used_value", "usedValue"]);
-        let (Some(begin), Some(original), Some(credits)) = (begin, original, credits) else {
-            return Err("用量记录字段缺失（begin_at / original_credits / credits）".into());
+        let Some(begin) = begin else {
+            return Err("用量记录字段缺失（begin_at）".into());
         };
         if !record_is_today(begin, today) {
             continue;
         }
-        used += num_f64(Some(original)).ok_or("original_credits 非数值")?;
-        billed += num_f64(Some(credits)).ok_or("credits 非数值")?;
+        // 消耗口径：实际扣费 credits（免费模型为 0），缺失回退原价名义值
+        let actual = num_f64(credits)
+            .or_else(|| num_f64(original))
+            .ok_or("积分字段非数值（credits / original_credits）")?;
+        used += actual;
     }
     let has_next = data.len() >= PAGE_SIZE;
-    Ok((used, billed, data.len(), has_next))
+    Ok((used, data.len(), has_next))
 }
 
 fn rounded(n: f64) -> f64 {
@@ -269,7 +272,6 @@ fn fetch_impl() -> Value {
         .build();
 
     let mut used = 0.0;
-    let mut billed = 0.0;
     let mut records = 0usize;
     for page in 1..=MAX_PAGES {
         let url = format!(
@@ -298,15 +300,15 @@ fn fetch_impl() -> Value {
             }
         };
         match parse_page(&body, &today) {
-            Ok((u, b, n, has_next)) => {
+            Ok((u, n, has_next)) => {
                 used += u;
-                billed += b;
                 records += n;
                 if !has_next {
                     return json!({
                         "ok": true,
                         "used_today": rounded(used),
-                        "billed_today": rounded(billed),
+                        // 历史字段：现与 used_today 同口径（实际扣费），保留以兼容旧前端
+                        "billed_today": rounded(used),
                         "records": records,
                         "source": "official_web_cookie",
                         "fetched_at": chrono::Utc::now().timestamp(),
@@ -342,19 +344,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_page_aggregates_today_only() {
+    fn parse_page_aggregates_today_actual_only() {
         let body = json!({
             "data": [
                 { "begin_at": "2026-11-19T10:00:00+08:00", "original_credits": "12.5", "credits": 3 },
-                { "begin_at": 1763510000000i64, "original_credits": 4, "credits": 1 },
+                // 免费模型：原价 20 但实际扣 0，不得计入消耗
+                { "begin_at": "2026-11-19T11:00:00+08:00", "original_credits": 20, "credits": 0 },
                 { "begin_at": "2026-11-18T10:00:00+08:00", "original_credits": 99, "credits": 99 }
             ],
             "page_result": { "page": 1 }
         });
-        // 第二条为固定时间戳，只校验解析不 panic；今天字符串首条 + 第三条过滤生效
-        let (used, billed, n, more) = parse_page(&body, "2026-11-19").unwrap();
-        assert!(used >= 12.5);
-        assert!(billed >= 3.0);
+        // 仅当日实际扣费求和（第三行前一日被过滤）
+        let (used, n, more) = parse_page(&body, "2026-11-19").unwrap();
+        assert!((used - 3.0).abs() < 1e-9);
         assert_eq!(n, 3);
         assert!(!more);
     }

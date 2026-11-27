@@ -527,7 +527,7 @@ export interface QoderUsedEntry {
 
 /**
  * Qoder 逐账号今日消耗（只认官网采集）：
- * 官网采集（Webview 同源 fetch，官方原始口径 original_credits）逐账号取当日用量。
+ * 官网采集（Webview 同源 fetch，口径 = 实际扣费 credits，免费模型为 0）逐账号取当日用量。
  * 未采集账号不出现在结果中（明细列 credits=null，不回退网关/快照）。
  */
 export function qoderUsedByUid(data: OverviewData): Map<string, QoderUsedEntry> {

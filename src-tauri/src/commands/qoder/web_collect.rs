@@ -291,8 +291,10 @@ fn begin_ms(v: Option<&Value>) -> Option<i64> {
     None
 }
 
-/// 采集记录 → 看板口径聚合（近 31 天零填充；口径 = `original_credits` 名义消耗，
-/// 与 `qoder_web_usage` 今日口径一致；`credits` 实际扣费仅留存总额备查）
+/// 采集记录 → 看板口径聚合（近 31 天零填充）。
+/// 口径 = **实际扣费** `credits`（免费模型上游下发 0，不得按原价虚增）；
+/// `credits` 缺失时回退 `original_credits` 名义值；`original_credits` 仅在
+/// 会话明细里展示原价/折扣，不参与消耗统计。
 fn aggregate(records: &[Value]) -> Value {
     use chrono::Datelike;
     let today = chrono::Local::now().date_naive();
@@ -308,7 +310,10 @@ fn aggregate(records: &[Value]) -> Value {
 
     for r in records {
         let Some(ms) = begin_ms(r.get("t")) else { continue };
-        let Some(oc) = num_of(r.get("oc")) else { continue };
+        // 消耗口径：实际扣费 credits（免费模型为 0），缺失回退原价 oc
+        let Some(credit) = num_of(r.get("c")).or_else(|| num_of(r.get("oc"))) else {
+            continue;
+        };
         let Some(day) = chrono::Local
             .timestamp_millis_opt(ms)
             .single()
@@ -317,8 +322,8 @@ fn aggregate(records: &[Value]) -> Value {
             continue;
         };
         used += 1;
-        billed_total += num_of(r.get("c")).unwrap_or(0.0);
-        *daily.entry(day.clone()).or_insert(0.0) += oc;
+        billed_total += credit;
+        *daily.entry(day.clone()).or_insert(0.0) += credit;
         let model = r
             .get("m")
             .and_then(Value::as_str)
@@ -328,10 +333,10 @@ fn aggregate(records: &[Value]) -> Value {
         let dm = daily_models.entry(day).or_default();
         let e = dm.entry(model.clone()).or_insert((0, 0.0));
         e.0 += 1;
-        e.1 += oc;
+        e.1 += credit;
         let mt = model_totals.entry(model).or_insert((0, 0.0));
         mt.0 += 1;
-        mt.1 += oc;
+        mt.1 += credit;
     }
 
     let mut usage_today = 0.0f64;
@@ -1223,7 +1228,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn aggregate_sums_nominal_by_local_day() {
+    fn aggregate_sums_actual_credits_by_local_day() {
         let today = chrono::Local::now().date_naive();
         let at = |d: chrono::NaiveDate, h: u32| -> i64 {
             d.and_hms_opt(h, 0, 0)
@@ -1234,18 +1239,27 @@ mod tests {
         let records = vec![
             json!({"t": at(today, 9), "oc": 10.5, "c": 3.0, "m": "qwen3-coder"}),
             json!({"t": at(today, 10), "oc": "2", "c": 1.0, "m": "qwen3-coder"}),
+            // 免费模型：原价 8 但实际扣 0，消耗统计必须按 0 计
+            json!({"t": at(today, 11), "oc": 8.0, "c": 0.0, "m": "free-model"}),
+            // 缺 c：回退原价 9
+            json!({"t": at(today, 12), "oc": 9.0, "m": "fallback"}),
             json!({"t": at(today - chrono::Duration::days(1), 23), "oc": 5.0, "c": 5.0, "m": "claude"}),
-            // 非法行：缺 oc
-            json!({"t": at(today, 11), "m": "x"}),
+            // 非法行：无 c 也无 oc
+            json!({"t": at(today, 13), "m": "x"}),
         ];
         let out = aggregate(&records);
-        assert_eq!(out["records_total"], json!(3));
-        assert!((out["summary"]["usage_today"].as_f64().unwrap() - 12.5).abs() < 1e-9);
-        assert!((out["summary"]["usage_7days"].as_f64().unwrap() - 17.5).abs() < 1e-9);
+        assert_eq!(out["records_total"], json!(5));
+        // 3 + 1 + 0（免费）+ 9（回退）
+        assert!((out["summary"]["usage_today"].as_f64().unwrap() - 13.0).abs() < 1e-9);
+        assert!((out["summary"]["usage_7days"].as_f64().unwrap() - 18.0).abs() < 1e-9);
         assert_eq!(out["daily"].as_array().unwrap().len(), 31, "近 31 天零填充");
-        let top = &out["models"].as_array().unwrap()[0];
-        assert_eq!(top["model"], json!("qwen3-coder"));
-        assert_eq!(top["request_count"], json!(2));
+        let models = out["models"].as_array().unwrap();
+        let top = &models[0];
+        assert_eq!(top["model"], json!("fallback"));
+        assert_eq!(top["request_count"], json!(1));
+        let free = models.iter().find(|m| m["model"] == json!("free-model"));
+        let free = free.expect("免费模型也应在模型列表（消耗 0）");
+        assert!(free["credit"].as_f64().unwrap().abs() < 1e-9);
     }
 
     #[test]

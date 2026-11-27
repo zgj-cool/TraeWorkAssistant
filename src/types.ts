@@ -2141,9 +2141,9 @@ export interface QoderCreditAccount {
 /** Qoder 官网网页会话积分消耗（今日，官方 histories 接口） */
 export interface QoderWebUsageToday {
   ok: boolean;
-  /** 名义消耗（original_credits 求和），用于「今日已用」 */
+  /** 实际扣费（credits 求和；免费模型为 0），用于「今日已用」 */
   used_today: number | null;
-  /** 实际扣费（credits 求和） */
+  /** 历史字段：现与 used_today 同口径，保留兼容 */
   billed_today?: number | null;
   records?: number;
   source?: string;

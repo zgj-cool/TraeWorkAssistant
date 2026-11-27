@@ -1,0 +1,4 @@
+# Release 依赖较多，默认按 CPU 数并行编译会耗尽内存（rustc-LLVM ERROR: out of memory）。
+# 串行编译牺牲部分构建速度，换取本机与 CI 打包的稳定性；可通过 -j 临时覆盖。
+[build]
+jobs = 1

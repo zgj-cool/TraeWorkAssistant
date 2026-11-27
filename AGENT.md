@@ -17,8 +17,9 @@ Windows 桌面端多账号签到 + 登录态切换 + 设备隔离 + API 网关�
 cd ai-work-assistant   # 本机目录暂为 trae-work-assistant，见文首说明
 npm install
 npm run tauri dev          # 开发模式（Tauri WebView 加载 Vite 5173）
-npm run tauri build        # 打包 MSI + NSIS 到 src-tauri/target/release/bundle/
-node scripts/rename_release.mjs     # 产物统一输出到 release/，中文命名 AI Work 助手_<版本>_x64*
+npm run tauri build        # 打包 MSI + NSIS，直接输出到根目录 release/（首次若旧 bundle 目录被占用，先退出 AI Work 助手）
+                           # Cargo 默认串行编译（src-tauri/.cargo/config.toml），避免 release 构建内存不足
+node scripts/rename_release.mjs     # 生成 latest.json 校验清单；兼容旧版 target/release/bundle/ 布局
 ```
 
 测试：
@@ -205,7 +206,7 @@ ai-work-assistant/
 | Qoder | `qoder_account_import_pat(name?, pat)` | PAT/作业令牌手工导入（幂等：同 token 稳定同 id `qd-<sha256前12>`）；`pt-`/`jt-` 前缀均写入 access_token+pat 双字段（确保 ensure_fresh PAT 重换通道覆盖）；**导入成功后清理旧设备流凭证残留**（refresh_token/refresh_expires_at_ms；machine_id/machine_token 保留——PAT 通道仍消费有效指纹）；userinfo/plan 回填失败容错 |
 | Qoder | `qoder_account_refresh_token(account_id)` → `QoderAccountView` | 单账号凭证续期（账号管理操作列手动按钮，对照 workbuddy_refresh_token 同语义）：force 恒刷（lazy_hours=i64::MAX 走 ensure_fresh 无条件重换路径——PAT 通道重换作业令牌、客户端通道 deviceToken/refresh 续期）；每账号互斥由 refresh_lock_for 兜底；成功回读最新视图（到期时间/登录态即时刷新），失败按 note 分类中文归因（no_credential/refresh_failed 暂态/pat_rejected/auth_dead 永久）；async（spawn_blocking） |
 | Qoder | `qoder_ide_scan()` / `qoder_cli_status()` / `qoder_live_logins()` | 本机 Qoder 客户端账号发现 / CLI 切号桥状态 / 双客户端实时登录标记——`{ide, work}` 均为池反查后的账号 id（ide=state.vscdb `secret://auth.userInfo` 解密；work=Work 数据目录根级 `auth.v1.dat` v10 解密 `user.id`，2026-10-04 实测修正：Cookies 库无 qoderuid）；未登录/解密失败 → null（fail-open，前端不展示徽标）；async（spawn_blocking 派发，join 失败拒绝 → 前端 catch 静默置空） |
-| Qoder | `qoder_web_usage_today()` | 官网今日积分消耗明细（`tasks/qoder_web_usage.rs`）：自动读取 `com.qodercn.app.stable` 多 Profile Chromium Cookies（Local State os_crypt.encrypted_key → DPAPI → AES-256-GCM v10，客户端占用则复制 Cookies+wal/shm 重试 3 次），调 `https://qoder.com.cn/api/v1/me/usages/big_model_credits/histories?page&page_size=500&start_time&end_time&order_by=begin_at&order=-1`（Cookie/Origin/Referer/X-Requested-With 头），逐页严格校验 begin_at/original_credits/credits，按本地自然日聚合名义消耗 used_today 与实际扣费 billed_today（上限 6 页）；失败 ok=false + 可读原因、**零 cookie/token 日志输出**；总览页 Qoder 今日已用优先此值，失败回退本地积分快照；async（spawn_blocking） |
+| Qoder | `qoder_web_usage_today()` | **已废弃（页面不再调用，由 `qoder_web_collect_start` Webview 同源采集取代）**：官网今日积分消耗明细（`tasks/qoder_web_usage.rs`）：自动读取 `com.qodercn.app.stable` 多 Profile Chromium Cookies（Local State os_crypt.encrypted_key → DPAPI → AES-256-GCM v10，客户端占用则复制 Cookies+wal/shm 重试 3 次），调 `https://qoder.com.cn/api/v1/me/usages/big_model_credits/histories?page&page_size=500&start_time&end_time&order_by=begin_at&order=-1`（Cookie/Origin/Referer/X-Requested-With 头），逐页校验 begin_at 与积分字段，按本地自然日聚合**实际扣费 credits**（免费模型为 0；credits 缺失回退 original_credits）到 used_today（billed_today 同口径保留兼容）（上限 6 页）；失败 ok=false + 可读原因、**零 cookie/token 日志输出**；async（spawn_blocking） |
 | Qoder | `qoder_checkin_start(opts)` → NDJSON `qoder-checkin-progress` | Rust 直调 `tasks/qoder_checkin.rs::run_checkin_round`（sash 双活动 claim，幂等回放归类已签；claim 间隔 1~3s 随机抖动；claim POST 与列表补学统一最小头形态 `minimal_auth_headers`——issue #114：claim 端点带设备指纹头族被上游风控按形态 503 拦截，最小头通过，主列表/余额 GET 维持完整头；401 刷新一次重试；campaign_id 路径段白名单；done 事件含 `skipped_empty_campaigns` 单列计数（无签到任务归类 skip 非失败，2026-11-21 口径）） |
 | Qoder | `qoder_checkin_results(days?)` | 签到日志（qoder_checkin_results 表 90 天滚动，逐条 UPSERT 按 pk=date\|user_id\|time_ms 去重） |
 | Qoder | `qoder_checkin_task_register(times[]) / _status / _unregister` | schtasks 每日签到任务（主 exe `--task-run qoder-checkin`；应用内调度器同款默认 10:15 单次覆盖双活动） |

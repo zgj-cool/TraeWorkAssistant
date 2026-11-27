@@ -131,7 +131,7 @@ export function aggregateQoderWebAccounts(
 
 /**
  * Qoder 官网采集聚合（Webview 同源 fetch，日 × 模型，31 天零填充）。
- * 口径：名义消耗 original_credits；仅覆盖已采集账号。
+ * 口径：实际扣费 credits（免费模型为 0）；仅覆盖已采集账号。
  */
 export function qoderWebToPoints(r: QoderWebUsage | null): BoardPoint[] {
   if (!r) return [];

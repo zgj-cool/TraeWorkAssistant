@@ -18,9 +18,43 @@ import type { PlatformScope } from './KpiRow';
  *（record_usage_qoder 转发时逐请求落库）；两者均无费用/缓存 token 字段 → 相应列隐藏。
  * Qoder 行支持展开看各轮请求级明细（键口径 session_id ∪ preview，纯本地零网络；
  * 官网源下展开即该请求本身）。
+ *
+ * 三平台均支持多选合计积分：点击整行或行首复选框即选中/取消（跨页保留，
+ * 筛选变化即清空）。Trae / Buddy 经 API 网关转发时一个任务会拆成多条会话，
+ * 逐行累加不便；Qoder 官网采集已把同任务流水合并成单行，选中即任务总消耗。
  */
 
 const PAGE_SIZE = 50;
+
+/**
+ * 行键（React key 与勾选态共用）：同账号 + 会话 + 秒级时间戳 + 页内序号。
+ * 勾选态以行键为身份跨页留存，翻页回来仍处于选中状态。
+ */
+function rowKeyOf(r: UsageSessionView, idx: number): string {
+  return `${r.user_id}-${r.session_id || 'x'}-${r.ts}-${idx}`;
+}
+
+/**
+ * 表格列数（基础列 + 勾选列 + 展开列 + 平台附加列）：
+ * 空结果行与展开明细行的 colSpan 共用，避免两处手算漂移。
+ */
+function columnCount(
+  scope: PlatformScope,
+  selCol: boolean,
+  richColumns: boolean,
+  showCacheCost: boolean,
+): number {
+  // 时间 / 账号 / 模型 / 消耗积分（会话说明列仅 Trae、Buddy 有）
+  const base = 4 + (scope === 'qoder' ? 0 : 1);
+  return (
+    base +
+    (selCol ? 1 : 0) +
+    // Qoder：展开 chevron + 原价/折扣 + 费用
+    (scope === 'qoder' ? 3 : 0) +
+    (richColumns ? 1 : 0) +
+    (showCacheCost ? 2 : 0)
+  );
+}
 
 function fmtDate(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -46,7 +80,8 @@ export default function SessionsTab({
   const pushToast = useAppStore((s) => s.pushToast);
   // 会话概述显示开关（issue #82 T6.1）：settings 未加载/缺字段时按默认开处理
   const showPreview = useAppStore((s) => s.settings?.sessions_preview_enabled) !== false;
-  const [start, setStart] = useState(() => fmtDate(new Date(Date.now() - 6 * 86400_000)));
+  // 默认「今日」：会话明细最常看当天消耗，跨天更直观（快捷区间仍可切近 7/30 天）
+  const [start, setStart] = useState(() => fmtDate(new Date()));
   const [end, setEnd] = useState(() => fmtDate(new Date()));
   const [model, setModel] = useState('');
   const [userId, setUserId] = useState('');
@@ -66,6 +101,10 @@ export default function SessionsTab({
   const [detailError, setDetailError] = useState<string | null>(null);
   // 明细请求序号守卫：快速切换展开行时旧响应可能后到，仅最新一次请求可写明细态
   const detailSeqRef = useRef(0);
+  // 多会话积分合计：rowKey → 行数据（勾选态跨页留存，故存快照）
+  const [selected, setSelected] = useState<Record<string, UsageSessionView>>({});
+  // 表头「全选本页」复选框的三态（部分选中显示 indeterminate）
+  const headCbRef = useRef<HTMLInputElement>(null);
 
   const toggleDetail = (key: string, r: UsageSessionView) => {
     if (expandedKey === key) {
@@ -108,6 +147,12 @@ export default function SessionsTab({
     setModel('');
     resetExpanded();
   }, [scope, resetExpanded]);
+
+  // 筛选条件变化（含看板刷新）即清空勾选：行键带页内序号，结果集一变就可能
+  // 指向另一行，留着会让合计变成「看不见的积分」。翻页不在依赖内——跨页累加是主要用法。
+  useEffect(() => {
+    setSelected({});
+  }, [scope, start, end, model, userId, refreshKey]);
 
   useEffect(() => {
     // D4（审查修复清单 v1.4.9）：开始日期晚于结束日期时不发无效请求（原实现
@@ -162,7 +207,50 @@ export default function SessionsTab({
   }, [scope, start, end, model, userId, page, refreshKey, pushToast]);
 
   const totalPages = data ? Math.max(1, Math.ceil(data.total / data.page_size)) : 1;
+  // ---- 勾选合计（Trae / Buddy）----
+  const pageRows = data?.rows ?? [];
+  const pageRowKeys = pageRows.map((r, i) => rowKeyOf(r, i));
+  const pageSelectedCount = pageRowKeys.filter((k) => selected[k]).length;
+  const allPageSelected = pageRowKeys.length > 0 && pageSelectedCount === pageRowKeys.length;
+  const selectedRows = Object.values(selected);
+  const selectedCount = selectedRows.length;
+  const selectedCredits = selectedRows.reduce((sum, r) => sum + (r.credits || 0), 0);
+  const selectedInputTokens = selectedRows.reduce((sum, r) => sum + (r.input_tokens || 0), 0);
+  const selectedOutputTokens = selectedRows.reduce((sum, r) => sum + (r.output_tokens || 0), 0);
+  // 三平台均渲染勾选列（行点击与复选框同效，供多选合计积分）
+  const selCol = true;
+
+  const toggleSelected = (key: string, r: UsageSessionView) =>
+    setSelected((prev) => {
+      if (!prev[key]) return { ...prev, [key]: r };
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+
+  const togglePageSelected = () => {
+    setSelected((prev) => {
+      const next = { ...prev };
+      if (allPageSelected) {
+        pageRowKeys.forEach((k) => delete next[k]);
+      } else {
+        pageRows.forEach((r, i) => {
+          next[rowKeyOf(r, i)] = r;
+        });
+      }
+      return next;
+    });
+  };
+
+  // 部分选中时表头复选框显示为 indeterminate（HTML 属性只能命令式设置）
+  useEffect(() => {
+    if (headCbRef.current) {
+      headCbRef.current.indeterminate = pageSelectedCount > 0 && !allPageSelected;
+    }
+  }, [pageSelectedCount, allPageSelected]);
+
   // issue #82 问题2：Buddy 官网请求级行无 token、费用字段 → 隐藏这两列（恒显示 '—' 无信息量）。
+  // 注：Qoder 亦有勾选列，行点击与复选框同效（点击整行选中）。
   // 会话说明列三平台均展示：Buddy 已接入上游 input/inputTrunc（旧缓存未刷新前显示 '—'）
   const richColumns = scope !== 'buddy';
   // issue #82 问题5：Qoder 网关流水无缓存 token/费用字段 → 隐藏这两列
@@ -197,6 +285,9 @@ export default function SessionsTab({
           }}
           className="input !py-1.5 !text-xs w-36"
         />
+        <button className="btn-outline !px-2 !py-1 !text-[12px]" onClick={() => setRange(0)}>
+          今日
+        </button>
         <button className="btn-outline !px-2 !py-1 !text-[12px]" onClick={() => setRange(6)}>
           近 7 天
         </button>
@@ -235,6 +326,56 @@ export default function SessionsTab({
         </select>
         {loading && <span className="text-xs text-slate-400">加载中…</span>}
       </div>
+
+      {/* 多会话积分合计条：未选时作功能引导，已选时实时汇总。
+          空结果页不渲染引导（勾选列此时根本不存在） */}
+      {selCol && (selectedCount > 0 || pageRows.length > 0) && (
+        <div
+          className={`flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border px-4 py-2 text-xs ${
+            selectedCount > 0
+              ? 'border-brand-200 bg-brand-50/60 text-slate-600 dark:border-brand-500/30 dark:bg-brand-500/10 dark:text-zinc-300'
+              : 'border-dashed border-slate-200 text-slate-400 dark:border-zinc-800'
+          }`}
+        >
+          {selectedCount > 0 ? (
+            <>
+              <span className="font-medium text-slate-700 dark:text-zinc-100">
+                已选 {selectedCount} 条会话
+              </span>
+              <span>
+                合计消耗{' '}
+                <b className="tabular-nums text-brand-600 dark:text-brand-400">
+                  {fmtCredits(selectedCredits)}
+                </b>{' '}
+                积分
+              </span>
+              {(selectedInputTokens > 0 || selectedOutputTokens > 0) && (
+                <span
+                  className="tabular-nums text-slate-500 dark:text-zinc-400"
+                  title={`输入 ${selectedInputTokens.toLocaleString()} / 输出 ${selectedOutputTokens.toLocaleString()}`}
+                >
+                  Token 入/出 {fmtTokens(selectedInputTokens)} / {fmtTokens(selectedOutputTokens)}
+                </span>
+              )}
+              <button
+                className="btn-ghost !px-1.5 !py-0.5 !text-[11px] text-slate-500"
+                onClick={() => setSelected({})}
+              >
+                清空选择
+              </button>
+              <span className="ml-auto text-[11px] text-slate-400">
+                翻页保留选择；改筛选或刷新会清空
+              </span>
+            </>
+          ) : (
+            <span>
+              {scope === 'qoder'
+                ? '点击任意行即可选中/取消，选中多行可合计积分消耗'
+                : '点击任意行即可选中/取消；同一任务经 API 网关转发常拆成多条会话，选中多行可合计积分消耗'}
+            </span>
+          )}
+        </div>
+      )}
 
       {error && (
         <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-2 text-xs text-rose-600 dark:border-rose-900/50 dark:bg-rose-950/40 dark:text-rose-300">
@@ -275,6 +416,18 @@ export default function SessionsTab({
             <table className="w-full text-sm">
               <thead className="border-b border-slate-200/70 bg-slate-50/70 text-[11.5px] font-medium tracking-[0.01em] text-slate-500 dark:border-zinc-800/70 dark:bg-zinc-900/40 dark:text-zinc-400">
                 <tr>
+                  {selCol && (
+                    <th className="w-8 px-2 py-2 text-center">
+                      <input
+                        ref={headCbRef}
+                        type="checkbox"
+                        className="h-3.5 w-3.5 cursor-pointer rounded border-slate-300 text-brand-600 focus:ring-brand-500"
+                        checked={allPageSelected}
+                        onChange={togglePageSelected}
+                        title="全选/取消本页"
+                      />
+                    </th>
+                  )}
                   {scope === 'qoder' && <th className="w-8" />}
                   <th className="px-4 py-2 text-left">时间</th>
                   <th className="px-4 py-2 text-left">账号</th>
@@ -318,7 +471,7 @@ export default function SessionsTab({
               </thead>
               <tbody>
                 {(data?.rows ?? []).map((r, idx) => {
-                  const rowKey = `${r.user_id}-${r.session_id || 'x'}-${r.ts}-${idx}`;
+                  const rowKey = rowKeyOf(r, idx);
                   return (
                     <RowWithDetail
                       key={rowKey}
@@ -326,6 +479,9 @@ export default function SessionsTab({
                       r={r}
                       idx={idx}
                       scope={scope}
+                      selCol={selCol}
+                      selected={Boolean(selected[rowKey])}
+                      onToggleSelected={() => toggleSelected(rowKey, r)}
                       richColumns={richColumns}
                       showCacheCost={showCacheCost}
                       showPreview={showPreview}
@@ -340,12 +496,7 @@ export default function SessionsTab({
                 {data && data.rows.length === 0 && (
                   <tr>
                     <td
-                      colSpan={
-                        (scope === 'qoder' ? 4 : 5) +
-                        (richColumns ? 1 : 0) +
-                        (showCacheCost ? 2 : 0) +
-                        (scope === 'qoder' ? 3 : 0)
-                      }
+                      colSpan={columnCount(scope, selCol, richColumns, showCacheCost)}
                       className="px-4 py-6 text-center text-xs text-slate-400"
                     >
                       当前筛选条件下无会话记录
@@ -385,15 +536,19 @@ export default function SessionsTab({
 
 /**
  * 单会话行 + Qoder 展开子行（「展开会话看各轮明细」）：
- * 主行与原实现同列结构；qoder 作用域行首加展开 chevron，展开后请求级行
- * 以子表渲染（时间 / 模型 / 积分 / Token / 轮 id）。非 qoder 平台无展开能力
- * （Trae/Buddy 上游缓存无逐请求明细），直渲染主行。
+ * 主行与原实现同列结构；三平台行首均有勾选列，点击整行与勾选复选框同效
+ * （选中/取消）；qoder 作用域另有展开 chevron，展开后请求级行以子表渲染
+ * （时间 / 模型 / 积分 / Token / 轮 id）；Trae/Buddy 上游缓存无逐请求明细，
+ * 展开能力仍仅 Qoder 有。
  */
 function RowWithDetail({
   rowKey,
   r,
   idx,
   scope,
+  selCol,
+  selected,
+  onToggleSelected,
   richColumns,
   showCacheCost,
   showPreview,
@@ -407,6 +562,10 @@ function RowWithDetail({
   r: UsageSessionView;
   idx: number;
   scope: PlatformScope;
+  /** 行首勾选列（仅 Trae / Buddy） */
+  selCol: boolean;
+  selected: boolean;
+  onToggleSelected: () => void;
   richColumns: boolean;
   showCacheCost: boolean;
   showPreview: boolean;
@@ -417,18 +576,29 @@ function RowWithDetail({
   onToggle: () => void;
 }) {
   const expandable = scope === 'qoder';
-  // Qoder 官网无会话说明字段 → 该页不渲染说明列（基础列 5 → 4）
-  const baseCols = scope === 'qoder' ? 4 : 5;
-  const span =
-    baseCols +
-    (richColumns ? 1 : 0) +
-    (showCacheCost ? 2 : 0) +
-    (scope === 'qoder' ? 3 : 0);
+  const span = columnCount(scope, selCol, richColumns, showCacheCost);
   return (
     <>
-      <tr className="row-hover border-t border-slate-200/70 dark:border-zinc-800">
+      <tr
+        className={`row-hover cursor-pointer border-t border-slate-200/70 dark:border-zinc-800${
+          selected ? ' bg-brand-500/10 dark:bg-brand-500/10' : ''
+        }`}
+        onClick={onToggleSelected}
+        title={selected ? '点击取消选中' : '点击选中加入合计'}
+      >
+        {selCol && (
+          <td className="px-2 py-2 text-center" onClick={(e) => e.stopPropagation()}>
+            <input
+              type="checkbox"
+              className="h-3.5 w-3.5 cursor-pointer rounded border-slate-300 text-brand-600 focus:ring-brand-500"
+              checked={selected}
+              onChange={onToggleSelected}
+              title={selected ? '移出已选合计' : '加入已选合计'}
+            />
+          </td>
+        )}
         {expandable && (
-          <td className="px-2 py-2 text-center">
+          <td className="px-2 py-2 text-center" onClick={(e) => e.stopPropagation()}>
             <button
               className="btn-ghost !p-1 text-slate-400"
               title={expanded ? '收起各轮明细' : '展开各轮请求明细'}
