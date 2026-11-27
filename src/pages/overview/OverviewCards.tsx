@@ -110,7 +110,7 @@ function MetricCell({
         'group min-w-0 text-left transition-colors hover:bg-slate-100/70 dark:hover:bg-zinc-800/45',
         s.box,
       )}
-      title={`前往${label}详情`}
+      title={`查看${label}`}
     >
       <span className={cn('block truncate font-medium text-slate-500 dark:text-zinc-400', s.label)}>
         {label}
@@ -259,12 +259,12 @@ export function PlatformCard({
   /** 合计仅显示总额，完整口径（账号数等）放 title 提示 */
   const detailTitle =
     tab === 'credits'
-      ? `${creditsWithData.length}/${credits.length} 个账号有今日积分明细，合计 ${fmtCredits(creditsTotal ?? 0)}`
+      ? `今日积分明细：${creditsWithData.length}/${credits.length} 账号，合计 ${fmtCredits(creditsTotal ?? 0)}`
       : tab === 'tokens'
-        ? `今日网关 Token 合计 ${fmtTokens(tokens.total ?? 0)}，${tokens.rows.length} 个账号有明细`
+        ? `今日 Token：合计 ${fmtTokens(tokens.total ?? 0)}，${tokens.rows.length} 账号有明细`
         : tab === 'expiry'
           ? `${summary.expiringDetails.length} 个账号有 7 日内到期积分`
-          : `${summary.alerts.length} 项待处理账号`;
+          : `${summary.alerts.length} 个待处理账号`;
 
   return (
     <section className="card flex flex-col overflow-hidden">
@@ -294,7 +294,7 @@ export function PlatformCard({
         size="hero"
         label="可用积分"
         value={valueOrDash(summary.available)}
-        hint="各账号余额合计"
+        hint="账号余额合计"
         onClick={() => onGo(meta.credits)}
       />
 
@@ -328,7 +328,7 @@ export function PlatformCard({
           size="sm"
           label="7 天内到期"
           value={valueOrDash(summary.expiringIn7d)}
-          hint="剩余 > 0 的包"
+          hint="剩余积分包"
           onClick={() => onGo(meta.credits, { tab: 'expiry' })}
           warn={(summary.expiringIn7d ?? 0) > 0}
         />
@@ -336,7 +336,7 @@ export function PlatformCard({
           size="sm"
           label="待处理"
           value={`${summary.alertAccounts} 个`}
-          hint="临期 / 重登"
+          hint="凭证临期 / 重登"
           onClick={() => onGo(meta.accounts)}
           warn={alert}
         />
@@ -361,7 +361,7 @@ export function PlatformCard({
         {tab === 'credits' &&
           (credits.length === 0 ? (
             <p className="px-3.5 py-3 text-[13px] leading-relaxed text-slate-500 dark:text-zinc-400">
-              本平台暂无账号，导入账号后这里会按账号展示今日积分消耗。
+              暂无账号，导入后查看今日积分消耗。
             </p>
           ) : (
             credits.map((r) => (
@@ -373,7 +373,7 @@ export function PlatformCard({
                 rightClass={
                   r.credits == null ? 'text-slate-400' : 'text-amber-600 dark:text-amber-400'
                 }
-                hint="前往积分看板"
+                hint="查看积分明细"
                 onClick={() => onGo(meta.credits)}
               />
             ))
@@ -383,10 +383,10 @@ export function PlatformCard({
           (tokens.rows.length === 0 ? (
             <p className="px-3.5 py-3 text-[13px] leading-relaxed text-slate-500 dark:text-zinc-400">
               {tokens.total == null
-                ? '今日暂无网关用量。启动 API 服务并产生请求后，这里会按账号展示输入 / 输出 Token。'
+                ? '暂无 Token 用量，启动 API 服务后统计。'
                 : tokens.total === 0
-                  ? '今日无 Token 消耗（请求未回传 usage）。'
-                  : `今日合计 ${fmtTokens(tokens.total)}，账号级明细自本版本起累计，暂无记录。`}
+                  ? '无 Token 用量（请求未回传 usage）。'
+                  : `今日合计 ${fmtTokens(tokens.total)}，历史请求无账号明细。`}
             </p>
           ) : (
             <>
@@ -397,13 +397,13 @@ export function PlatformCard({
                   sub={`输入 ${fmtTokens(r.prompt_tokens)} / 输出 ${fmtTokens(r.completion_tokens)}`}
                   right={fmtTokens(r.total_tokens)}
                   rightClass="text-violet-600 dark:text-violet-400"
-                  hint="前往积分看板 · Token 统计"
+                  hint="查看 Token 统计"
                   onClick={() => onGo(meta.credits, { tab: 'tokens', source: 'gateway' })}
                 />
               ))}
               {rowsTotal < (tokens.total ?? 0) && (
                 <p className="px-3.5 py-2 text-[12px] leading-relaxed text-slate-400">
-                  其余 {fmtTokens((tokens.total ?? 0) - rowsTotal)} 为升级前历史请求（无账号级明细）。
+                  历史请求 {fmtTokens((tokens.total ?? 0) - rowsTotal)} 无账号明细。
                 </p>
               )}
             </>
@@ -412,7 +412,7 @@ export function PlatformCard({
         {tab === 'expiry' &&
           (summary.expiringDetails.length === 0 ? (
             <p className="px-3.5 py-3 text-[13px] leading-relaxed text-slate-500 dark:text-zinc-400">
-              7 日内没有即将到期的积分包。
+              7 日内无积分包到期。
             </p>
           ) : (
             summary.expiringDetails.map((d) => (
@@ -431,7 +431,7 @@ export function PlatformCard({
         {tab === 'alerts' &&
           (summary.alerts.length === 0 ? (
             <p className="px-3.5 py-3 text-[13px] leading-relaxed text-slate-500 dark:text-zinc-400">
-              当前没有需要处理的账号。
+              无待处理账号。
             </p>
           ) : (
             summary.alerts.map((a) => (
@@ -441,7 +441,7 @@ export function PlatformCard({
                 sub={a.reason}
                 right="去处理"
                 rightClass="text-rose-500 dark:text-rose-400"
-                hint="前往账号页处理"
+                hint="处理账号"
                 onClick={() => onGo(a.view)}
               />
             ))

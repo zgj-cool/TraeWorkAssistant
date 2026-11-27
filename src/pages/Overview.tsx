@@ -182,16 +182,16 @@ export default function Overview() {
       if (collected.length === 0) return;
       qoderSyncingRef.current = true;
       setQoderSyncing(true);
-      pushToast('info', `正在后台同步 Qoder 官网用量（${collected.length} 个账号）…`);
+      pushToast('info', `正在同步 Qoder 官网用量（${collected.length} 个账号）…`);
       try {
         const r = await syncQoderWebAccounts(collected);
         if (r.ok > 0) {
-          pushToast('success', `Qoder 官网用量已同步 ${r.ok}/${r.total} 个账号`);
+          pushToast('success', `Qoder 官网用量已同步 ${r.ok}/${r.total} 账号`);
         }
         if (r.failed.length > 0) {
           pushToast(
             'warn',
-            `${r.failed.length} 个账号同步失败（登录态可能已过期），请到 Qoder 积分看板重新采集`,
+            `${r.failed.length} 个账号同步失败，请重新采集`,
           );
         }
         await reloadQoder();
@@ -205,7 +205,7 @@ export default function Overview() {
     });
 
     void withMinDelay(load(true, true), 600).then((errors) =>
-      pushToast(errors.length ? 'warn' : 'success', errors.length ? '部分数据源加载失败，已保留其余平台数据' : '已刷新'),
+      pushToast(errors.length ? 'warn' : 'success', errors.length ? '部分数据源加载失败' : '已刷新'),
     );
   };
 
@@ -216,14 +216,14 @@ export default function Overview() {
     <div className="animate-fade-in">
       <PageHeader
         title="全平台总览"
-        desc="Trae · Buddy · Qoder 账号与积分一屏掌握 · 网关 Token 消耗分账号可见 · 点击指标直达对应明细"
+        desc="三平台账号、积分与 Token 总览"
         actions={
           <div className="flex items-center gap-2">
             {updatedAt && <span className="text-[12px] text-slate-400 dark:text-zinc-500">更新于 {new Date(updatedAt).toLocaleTimeString('zh-CN', { hour12: false })}</span>}
-            {refreshing && <Badge tone="blue"><Spinner className="mr-1 h-3 w-3" /> 积分后台刷新中</Badge>}
-            {qoderSyncing && <Badge tone="blue"><Spinner className="mr-1 h-3 w-3" /> Qoder 官网同步中</Badge>}
-            {officialRefreshing && <Badge tone="blue"><Spinner className="mr-1 h-3 w-3" /> 已用积分后台刷新中</Badge>}
-            {data?.wbOfficial?.stale && <Badge tone="amber" title={data.wbOfficial.stale_reason}>Buddy 官网用量过期缓存</Badge>}
+            {refreshing && <Badge tone="blue"><Spinner className="mr-1 h-3 w-3" /> 积分刷新中</Badge>}
+            {qoderSyncing && <Badge tone="blue"><Spinner className="mr-1 h-3 w-3" /> Qoder 官网采集中</Badge>}
+            {officialRefreshing && <Badge tone="blue"><Spinner className="mr-1 h-3 w-3" /> 已用积分刷新中</Badge>}
+            {data?.wbOfficial?.stale && <Badge tone="amber" title={data.wbOfficial.stale_reason}>Buddy 用量缓存已过期</Badge>}
             {failed.length > 0 && <Badge tone="amber" title={failed.join('、')}>{failed.length} 项数据源未加载</Badge>}
             <button onClick={refresh} className="btn-outline" disabled={loading}>
               <RefreshCw size={15} className={loading ? 'animate-spin' : ''} /> 刷新
@@ -233,12 +233,12 @@ export default function Overview() {
       />
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-        <StatCard label="账号总数" value={kpis?.accounts ?? '—'} hint="三平台账号池合计" tone="brand" />
-        <StatCard label="可用总积分" value={kpis?.available != null ? fmtCredits(kpis.available) : '—'} hint="Trae + Buddy + Qoder 账号余额合计" tone="amber" />
+        <StatCard label="账号总数" value={kpis?.accounts ?? '—'} hint="Trae / Buddy / Qoder" tone="brand" />
+        <StatCard label="可用总积分" value={kpis?.available != null ? fmtCredits(kpis.available) : '—'} hint="三平台余额合计" tone="amber" />
         <StatCard
           label="今日已用积分"
           value={kpis?.usedToday != null ? fmtCredits(kpis.usedToday) : '—'}
-          hint="官网口径，缺失不回退本地/网关"
+          hint="仅官网数据"
           tone="cyan"
         />
         <StatCard
@@ -247,15 +247,15 @@ export default function Overview() {
           hint={
             view?.tokens.prompt != null
               ? `输入 ${fmtTokens(view.tokens.prompt)} / 输出 ${fmtTokens(view.tokens.completion ?? 0)}`
-              : 'API 网关三平台池暂无数据'
+              : 'API 网关暂无数据'
           }
           tone="violet"
         />
-        <StatCard label="7 天内到期积分" value={kpis?.expiringIn7d != null ? fmtCredits(kpis.expiringIn7d) : '—'} hint="仅统计剩余 > 0 的积分包" tone={(kpis?.expiringIn7d ?? 0) > 0 ? 'amber' : 'slate'} />
+        <StatCard label="7 天内到期积分" value={kpis?.expiringIn7d != null ? fmtCredits(kpis.expiringIn7d) : '—'} hint="剩余积分包" tone={(kpis?.expiringIn7d ?? 0) > 0 ? 'amber' : 'slate'} />
         <StatCard
           label="账号告警"
           value={kpis?.alerts ?? '—'}
-          hint="仅统计凭证临期 / 需重新登录"
+          hint="凭证临期 / 需重登"
           tone={(kpis?.alerts ?? 0) > 0 ? 'red' : 'green'}
         />
       </div>
@@ -280,7 +280,7 @@ export default function Overview() {
       </div>
 
       <p className="mt-5 text-[12px] leading-relaxed text-slate-500 dark:text-zinc-400">
-        统计口径：今日已用积分三个平台均只取官网源——Trae 取官网消耗明细（usage_history_fetch，缓存命中时标注）；Buddy 取官网用量聚合（workbuddy_usage_official_all）；Qoder 取官网采集（Webview 同源 fetch，每个账号独立登录、按账号归档并做 uid 校验）。官网源缺失时显示「—」，不回退本地快照或 API 网关（二者与官网差异大，易误导）。Token 消耗取 API 网关按落日用量（Trae / Buddy / Qoder 三池，按账号归入对应平台卡片；BuddyAI / 自定义池见 API 管理页用量统计）。刷新会强制重拉 Trae/Buddy 官网用量（跳过 10min 缓存，全量聚合需数十秒），并与 Qoder 官网采集（已采集账号逐账号静默重采）并发执行，互不阻塞；Qoder 官网采集首次需在积分看板点「官网采集」并登录。
+        积分消耗仅取官网数据，缺失显示「—」，不回退本地快照或 API 网关；Token 仅统计 API 网关三平台池，BuddyAI 与自定义池见 API 管理页。刷新同步官网用量与已采集的 Qoder 账号；Qoder 首次采集需在积分看板登录。
       </p>
     </div>
   );

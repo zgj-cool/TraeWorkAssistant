@@ -264,7 +264,7 @@ export function summarizeTrae(
     alerts,
     expiringDetails,
     [
-      usedToday == null ? '今日已用：官网明细暂无数据' : '今日已用：官网消耗明细',
+      usedToday == null ? '官网明细暂无数据' : '官网消耗明细',
       usage?.cached ? '官网明细缓存' : '',
     ].filter(Boolean),
   );
@@ -322,9 +322,9 @@ export function summarizeBuddy(
   const sourceNote =
     officialToday != null
       ? official?.stale
-        ? '今日已用：官网用量（过期缓存）'
-        : '今日已用：官网用量'
-      : '今日已用：官网用量暂无数据（不回退本地/网关）';
+        ? '官网用量（缓存已过期）'
+        : '官网用量'
+      : '官网用量暂无数据';
 
   return finish(
     'buddy',
@@ -422,10 +422,7 @@ export function summarizeQoder(
     usedToday = collectUsed != null ? round(collectUsed) : null;
   }
   const collectedTotal = webCollect?.accounts_total ?? webCollect?.accounts?.length ?? 0;
-  const sourceNote =
-    usedToday == null
-      ? '今日已用：官网采集暂无数据（不回退本地/网关）'
-      : `今日已用：官网采集（官方接口，已采集 ${collectedTotal}/${accounts.length} 账号）`;
+  const sourceNote = `官网采集 ${collectedTotal}/${accounts.length} 账号`;
   return finish(
     'qoder',
     accounts.length,
@@ -538,7 +535,7 @@ export function qoderUsedByUid(data: OverviewData): Map<string, QoderUsedEntry> 
   for (const a of data.qoderWeb?.accounts ?? []) {
     out.set(a.account_id, {
       credits: round(a.summary.usage_today),
-      source: '官网采集（逐账号）',
+      source: '官网采集',
     });
   }
   return out;
@@ -574,7 +571,7 @@ export function summarizeCreditUsage(
         day?.credits != null
           ? '官网消耗明细'
           : data.traeUsage
-            ? '官网当日无明细'
+            ? '官网无今日明细'
             : '官网明细未加载',
     });
   }
@@ -588,7 +585,7 @@ export function summarizeCreditUsage(
       uid: a.id,
       name: a.nickname,
       credits: rec ? round(rec.usage_today) : null,
-      source: rec ? '官网用量（逐账号）' : data.wbOfficial ? '官网仅合计口径' : '官网用量未加载',
+      source: rec ? '官网用量' : data.wbOfficial ? '官网仅合计口径' : '官网用量未加载',
     });
   }
 
@@ -613,7 +610,7 @@ export function summarizeCreditUsage(
       uid: a.id,
       name: a.nickname,
       credits: null,
-      source: data.qoderWeb ? '官网未采集该账号' : '官网用量未采集',
+      source: '未采集',
     });
   }
 

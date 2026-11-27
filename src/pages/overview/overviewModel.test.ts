@@ -99,7 +99,7 @@ describe('summarizeTrae', () => {
     const s = summarizeTrae(accounts, null, NOW);
     expect(s.usedToday).toBeNull();
     expect(s.expiringIn7d).toBeNull();
-    expect(s.notes[0]).toContain('暂无数据');
+    expect(s.notes[0]).toBe('官网明细暂无数据');
   });
 });
 
@@ -137,12 +137,14 @@ describe('summarizeBuddy', () => {
       NOW,
     );
     expect(withOfficial.usedToday).toBe(9.8);
-    expect(withOfficial.notes[0]).toContain('官网');
+    expect(withOfficial.notes[0]).toBe('官网用量');
+    const withStaleCache = summarizeBuddy(accounts, credits, [], { ...official, stale: true }, NOW);
+    expect(withStaleCache.notes[0]).toBe('官网用量（缓存已过期）');
 
     // 官网缺失：显示「—」，不回退本地快照/网关
     const withoutOfficial = summarizeBuddy(accounts, credits, [], null, NOW);
     expect(withoutOfficial.usedToday).toBeNull();
-    expect(withoutOfficial.notes[0]).toContain('不回退');
+    expect(withoutOfficial.notes[0]).toBe('官网用量暂无数据');
     expect(withOfficial.available).toBe(100);
     expect(withOfficial.expiringIn7d).toBe(30);
     expect(withOfficial.checkedToday).toBe(1);
@@ -206,17 +208,16 @@ describe('qoderUsedByUid 官网采集口径', () => {
 
     const used = qoderUsedByUid(data);
     expect([...used.keys()]).toEqual(['q1']);
-    expect(used.get('q1')).toEqual({ credits: 10, source: '官网采集（逐账号）' });
+    expect(used.get('q1')).toEqual({ credits: 10, source: '官网采集' });
 
     const view = buildOverview(data);
     const qoder = view.platforms.find((p) => p.key === 'qoder')!;
     expect(qoder.usedToday).toBe(10);
-    expect(qoder.notes[0]).toContain('官网采集');
-    expect(qoder.notes[0]).toContain('1/2');
+    expect(qoder.notes[0]).toBe('官网采集 1/2 账号');
     const rows = view.credits.rows.filter((r) => r.platform === 'qoder');
     expect(rows.find((r) => r.uid === 'q1')?.credits).toBe(10);
     expect(rows.find((r) => r.uid === 'q2')?.credits).toBeNull();
-    expect(rows.find((r) => r.uid === 'q2')?.source).toContain('官网未采集该账号');
+    expect(rows.find((r) => r.uid === 'q2')?.source).toBe('未采集');
     expect(view.credits.total).toBe(10);
   });
 
@@ -230,7 +231,7 @@ describe('qoderUsedByUid 官网采集口径', () => {
     const view = buildOverview(data);
     const qoder = view.platforms.find((p) => p.key === 'qoder')!;
     expect(qoder.usedToday).toBeNull();
-    expect(qoder.notes[0]).toContain('不回退');
+    expect(qoder.notes[0]).toBe('官网采集 0/1 账号');
     expect(view.credits.rows.find((r) => r.platform === 'qoder')?.credits).toBeNull();
     expect(view.credits.total).toBeNull();
   });
@@ -262,7 +263,7 @@ describe('summarizeQoder 与汇总', () => {
     expect(s.expiringIn7d).toBe(40);
     expect(s.expiringDetails).toHaveLength(1);
     expect(s.expiringDetails[0].credits).toBe(40);
-    expect(s.notes[0]).toContain('不回退');
+    expect(s.notes[0]).toBe('官网采集 0/1 账号');
   });
 
   it('Qoder 到期 = 窗口内积分包 + 明细未含 plan 包时的订阅额度（口径与积分看板一致）', () => {
@@ -362,7 +363,7 @@ describe('summarizeQoder 与汇总', () => {
 
     const summary = summarizeQoder(accounts, null, [], web, NOW);
     expect(summary.usedToday).toBe(18);
-    expect(summary.notes[0]).toContain('官网采集');
+    expect(summary.notes[0]).toBe('官网采集 2/2 账号');
 
     const usage = summarizeCreditUsage({ ...emptyData(), qoderAccounts: accounts, qoderWeb: web }, NOW);
     const qoderRows = usage.rows.filter((r) => r.platform === 'qoder');
@@ -370,7 +371,7 @@ describe('summarizeQoder 与汇总', () => {
       ['Qoder甲', 12],
       ['Qoder乙', 6],
     ]);
-    expect(qoderRows.every((r) => r.source === '官网采集（逐账号）')).toBe(true);
+    expect(qoderRows.every((r) => r.source === '官网采集')).toBe(true);
     expect(usage.total).toBe(18);
   });
 
@@ -464,7 +465,7 @@ describe('summarizeCreditUsage', () => {
     expect(s.rows.every((r) => r.credits === null)).toBe(true);
     // 缺失原因逐行给出，便于区分「未加载 / 无明细 / 未采集」
     expect(s.rows.find((r) => r.platform === 'trae')?.source).toContain('未加载');
-    expect(s.rows.find((r) => r.platform === 'qoder')?.source).toContain('官网');
+    expect(s.rows.find((r) => r.platform === 'qoder')?.source).toBe('未采集');
   });
 });
 
