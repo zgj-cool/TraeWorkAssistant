@@ -52,16 +52,12 @@ import type {
   OAuthLoginResult,
   OAuthLoginDoneEvent,
   ApiLogRecentResult,
-  UpdateAutoTickResult,
   PoolStatus,
   ProfileInfo,
   ProxyLogListResult,
   ProxyStatus,
   Settings,
   TagView,
-  UpdateCheckResult,
-  UpdateDownloaded,
-  UpdateDownloadProgress,
   GatewaySettings,
   LanIfaceIp,
   DispatchPolicy,
@@ -123,8 +119,6 @@ import type {
 const INVOKE_TIMEOUT_MS = 120_000;
 /** 长耗时命令覆盖表：null = 不设超时（后端有意不限时），数值 = 放宽后的毫秒上限 */
 const INVOKE_TIMEOUT_OVERRIDES: Record<string, number | null> = {
-  // 大文件安装包下载：后端注释明示「大文件慢速下载不能被整体超时掐断」，前端同步豁免
-  update_download: null,
   // 多账号串行网络操作：耗时随账号数线性增长，放宽到 10 分钟
   doubao_renew_run: 600_000,
   // 签到批量：签到逐账号串行 + probe 自动保活（保活开关默认开 + per-sid 分键，
@@ -1233,31 +1227,6 @@ export const api = {
     // 伪流式等待期 keep-alive 间隔秒数：0–60，0 = 关闭；重启复位为配置文件值
     pseudoKeepaliveGet: () => invoke<number>('pseudo_keepalive_get'),
     pseudoKeepaliveSet: (secs: number) => invoke<void>('pseudo_keepalive_set', { secs }),
-  },
-  updater: {
-    check: () => invoke<UpdateCheckResult>('update_check'),
-    // 第一步：下载安装包（完成后返回本地路径，等待用户确认安装）
-    // 注意：key 必须是 expectedVersion（Rust 参数 expected_version 的 Tauri 驼峰匹配），传 version 会报 missing required key
-    download: (p: {
-      downloadUrl: string;
-      assetName: string;
-      expectedVersion: string;
-      expectedSha256?: string | null;
-    }) => invoke<UpdateDownloaded>('update_download', p),
-    // 第二步：启动安装器（/P /UPDATE /R，完成后自动重启应用）
-    runInstaller: (p: { filePath: string; assetName: string }) =>
-      invoke<void>('update_run_installer', p),
-    onDownloadProgress: async (
-      cb: (e: UpdateDownloadProgress) => void,
-    ): Promise<UnlistenFn> =>
-      listen<UpdateDownloadProgress>('update-download-progress', (ev) =>
-        cb(ev.payload),
-      ),
-    onInstalling: async (cb: (assetName: string) => void): Promise<UnlistenFn> =>
-      listen<string>('update-installing', (ev) => cb(ev.payload)),
-    // F-86：无人值守更新编排单轮 tick（check → 空闲判定 → download → install 自动重启；
-    // 设置 auto_update_silent 默认关，前端每 2h 调一次）
-    autoTick: () => invoke<UpdateAutoTickResult>('update_auto_tick'),
   },
 };
 

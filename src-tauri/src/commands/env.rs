@@ -17,7 +17,7 @@ pub struct EnvStatus {
 }
 
 // 以下命令含耗时操作（注册表全量搜索、PowerShell 进程调用、最多 5s 的进程关闭轮询），
-// 一律标记 async 派发到线程池执行，避免阻塞 UI 主线程（与 updater 冻结修复同因）。
+// 一律标记 async 派发到线程池执行，避免阻塞 UI 主线程。
 
 #[tauri::command]
 pub fn open_trae_website(_app: AppHandle) -> Result<(), String> {

@@ -368,11 +368,7 @@ export default function SessionsTab({
               </span>
             </>
           ) : (
-            <span>
-              {scope === 'qoder'
-                ? '点击任意行即可选中/取消，选中多行可合计积分消耗'
-                : '点击任意行即可选中/取消；同一任务经 API 网关转发常拆成多条会话，选中多行可合计积分消耗'}
-            </span>
+            <span>点击任意行即可选中/取消，选中多行可合计积分消耗</span>
           )}
         </div>
       )}

@@ -2,7 +2,7 @@
 //! 落 stderr + 应用日志（可选），避免「前端收不到终态/结果事件却无任何线索」。
 //!
 //! 适用范围：终态/结果型事件（`*-done`、`account-captured`、`proxy-crashed` 等）。
-//! 高频进度事件（`checkin-progress`、`update-download-progress`、`proxy-log` 等）
+//! 高频进度事件（`checkin-progress`、`proxy-log` 等）
 //! 可继续直接 emit：失败刷屏无意义，且不承载前端互斥解锁职责。
 use std::path::Path;
 

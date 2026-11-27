@@ -17,9 +17,9 @@ Windows 桌面端多账号签到 + 登录态切换 + 设备隔离 + API 网关�
 cd ai-work-assistant   # 本机目录暂为 trae-work-assistant，见文首说明
 npm install
 npm run tauri dev          # 开发模式（Tauri WebView 加载 Vite 5173）
-npm run tauri build        # 打包 MSI + NSIS，直接输出到根目录 release/（首次若旧 bundle 目录被占用，先退出 AI Work 助手）
-                           # Cargo 默认串行编译（src-tauri/.cargo/config.toml），避免 release 构建内存不足
-node scripts/rename_release.mjs     # 生成 latest.json 校验清单；兼容旧版 target/release/bundle/ 布局
+npm run tauri build        # 仅打包 MSI，直接输出到根目录 release/；构建后清理 target/release/bundle
+                           # Cargo 默认限制为 2 路编译（src-tauri/.cargo/config.toml），避免 release 构建内存不足
+node scripts/rename_release.mjs     # 校验 MSI 产物并输出 SHA256；兼容旧版 target/release/bundle/ 布局
 ```
 
 测试：
@@ -80,7 +80,7 @@ ai-work-assistant/
 │       │   ├── auth.rs           # API Key 鉴权（Bearer + x-api-key 双风格）
 │       │   ├── models_sync.rs    # 模型列表配置化（api_models.json）+ 官网 batch_get_detail_param 同步
 │       │   └── api_logger.rs     # API 请求日志
-│       └── commands/             # env / cert / proxy / accounts / checkin / switch / misc / profile / api_server / oauth / trae_apps(本机 Trae 账号发现) / process(三级关闭) / updater / wb_config(wb 手工配置读写)；workbuddy/ 为目录模块（common/accounts/checkin/credits/cli/chatdata/oauth/env_reset，mod.rs pub use 保持命令路径不变）
+│       └── commands/             # env / cert / proxy / accounts / checkin / switch / misc / profile / api_server / oauth / trae_apps(本机 Trae 账号发现) / process(三级关闭) / wb_config(wb 手工配置读写)；workbuddy/ 为目录模块（common/accounts/checkin/credits/cli/chatdata/oauth/env_reset，mod.rs pub use 保持命令路径不变）
 │       └── tasks/                # 后台业务直调模块（trae_checkin / wb_checkin / wb_common / wb_credits / qoder_web_usage（官网会话今日消耗；Webview 采集见 commands/qoder/web_collect.rs） / doubao_session / doubao_quota / doubao_chats / ui_click）
 │           ├── trae_checkin.rs   # 批量签到（vault 解密内存传递，无子进程）
 │           ├── wb_checkin.rs     # WorkBuddy 签到/成长/续期（run_checkin_round / run_growth_round / run_renew_only）
@@ -171,7 +171,6 @@ ai-work-assistant/
 | 设置 | `settings_get()` / `settings_set(patch: Settings)` | Settings 全部 snake_case |
 | 设置 | `autostart_status()` / `autostart_set(enabled)` | 开机自启查询 / 开关（T11，即时生效）；配套 `settings.silent_checkin` 启动静默签到 |
 | 计划 | `task_register(time)` / `task_status()` / `task_unregister()` | `schtasks` 注册每日签到 |
-| 更新 | `update_check()` / `update_download(...)` → `UpdateDownloaded` / `update_run_installer({file_path, asset_name})` | 两步确认制：下载（确认一）→ 安装（确认二）。安装器参数 `/P /UPDATE /R`：被动进度条 + 跳过卸载直接覆盖 + 完成后自动重启应用；`run_installer` 校验路径必须位于临时更新目录 |
 | WorkBuddy | `workbuddy_env_check()` → `WorkBuddyEnvCheck` | 客户端安装/运行/版本 + auth 文件存在性 + `~/.workbuddy` 快照解析（uid/昵称/editionType）；复用 app_locate 四级探测 |
 | WorkBuddy | `workbuddy_accounts_list` → `WorkBuddyAccountView[]` | 账号池（data/workbuddy_accounts.json）+ 在线标记（auth 文件 uid 匹配）+ 快照/凭证副本存在性；id = `wb-<sha256(token)前12位>`（同 token 稳定同 id） |
 | WorkBuddy | `workbuddy_account_save/remove` / `workbuddy_scan_auth_file` / `workbuddy_account_import_auth` | 别名备注 / 删除 / auth 文件扫描预览 / 确认入池（凭证入 token store 副本，零明文出 Rust） |
@@ -273,8 +272,6 @@ ai-work-assistant/
 | `switch-done` | `{ success: boolean, raw: string }` |
 | `save-login-progress` | `string`（switcher NDJSON 单行） |
 | `save-login-done` | `{ success: boolean, raw: string }` |
-| `update-download-progress` | `{ received, total, percent }`（更新包下载进度） |
-| `update-installing` | `string`（asset_name，安装器已启动、应用即将退出） |
 | `wb-checkin-progress` | `{"type":"start",total,mode?}` / `{"type":"account",index,user_id,name,status,message}` / `{"type":"growth",index,user_id,name,status,travel?,lottery?,tasks?,energy?,streak?}` / `{"type":"done",ok,already,failed,mode?}` / `{"type":"exit",ok}`（WorkBuddy 签到/成长中心独立管线：`mode:"growth"` 标记成长事件，与 Trae checkin-progress 互不串扰） |
 | `wb-oauth-progress` | `{stage:'init'|'browser'|'polling'|'success'|'error', message, auth_url?}`（OAuth 扫码流程进度；auth_url 仅 browser 阶段携带） |
 | `wb-oauth-done` | `{ok, id?, nickname?, message}`（扫码结果；成功已入池，凭证不出 Rust） |
@@ -408,26 +405,21 @@ ai-work-assistant/
 - 一个提交包含多类变更时，按最高级别升位；纯文档/注释改动不升级；版本同步提交本身不再升位
 - 升版提交执行 `npm run set-version <x.y.z>` 一键同步（底层 `scripts/sync_version.mjs`：package.json / **package-lock.json**（根级 + `packages[""]` 两处）/ Cargo.toml / Cargo.lock / AGENT.md 标题）；CHANGELOG.md 手动新增条目
 - **package-lock.json 曾两次遗漏**（3.9.4、3.9.5 升版）：根因是脚本不覆盖，3.9.5 起已收敛进 `sync_version.mjs` 自动同步两处 `"version"`——若脚本异常报「结构异常」需人工检查；兜底手工方式为 `npm install --package-lock-only` 或手改两处 `"version"`
-- 版本号单一来源为 `src-tauri/Cargo.toml`：tauri.conf.json 不写 version（自动回退），Rust 端 `env!("CARGO_PKG_VERSION")` 自动取，前端关于页运行时经 `getVersion()` 读取（about.ts 不写版本号），NSIS / MSI 安装包版本号自动跟随
+- 版本号单一来源为 `src-tauri/Cargo.toml`：tauri.conf.json 不写 version（自动回读），Rust 端 `env!("CARGO_PKG_VERSION")` 自动取，前端关于页运行时经 `getVersion()` 读取（about.ts 不写版本号），MSI 安装包版本号自动跟随
 
 **发版全流程**（仅用户明确发版时）：
 
 1. **调整版本**：`npm run set-version <x.y.z>` + package-lock.json 同步（见上方升位细则） + CHANGELOG.md 新增条目
-2. **编译**：Windows 本机 `npm run tauri build` 产出 setup / msi / portable 三件套；macOS 由 GitHub Actions `build-macos.yml`（push macos_main 触发）产出 aarch64 / x64 / universal 三个 dmg
+2. **编译**：Windows 本机 `npm run tauri build` 仅产出 MSI，直接写入根目录 `release/`；macOS 分支由 GitHub Actions `build-macos.yml`（push macos_main 触发）产出 aarch64 / x64 / universal 三个 dmg
 3. **提交 → 推送 → 打 tag 并推送**
-4. **发布 GitHub Release**：上传资产 + `latest.json`，标题见下方格式约定
+4. **发布 GitHub Release**：上传对应平台安装包，标题见下方格式约定；应用内更新功能已移除，不再生成或上传 `latest.json`
 
-**Release 资产清单（红线，缺一即更新器 fail-closed）**：
+**Release 资产清单**：
 
 | 平台 | 资产 |
 |---|---|
-| Windows | `AI Work 助手_<版本>_x64-setup.exe` / `_x64_zh-CN.msi` / `_x64_portable.zip` |
+| Windows | `AI Work 助手_<版本>_x64_zh-CN.msi` |
 | macOS | `AI Work 助手_<版本>_aarch64.dmg` / `_x64.dmg` / `_universal.dmg` |
-| 校验清单 | `latest.json`（**必须收录上述全部 6 个资产**的 SHA-256） |
-
-- **latest.json 单一清单原则**：updater（Windows 与 macOS 同源）下载安装包后与清单比对哈希，清单存在即 fail-closed——缺失 / 损坏 / 版本不符 / **目标资产未收录**任一情况直接阻止自动更新。**只上传单一平台的清单 = 另一平台全部用户自动更新被阻断**（v3.6.1 事故：清单只含 exe/msi，mac dmg 未收录，mac 更新全挂）
-- CI 双平台分别生成清单（Windows 落 `release/windows/`、mac 落 `release/mac/`，`rename_release.mjs` 仅同目录自动合并），**发布时必须人工合并为一份全资产清单再上传**；发布前逐项核对 6 资产均在 `assets` 键内
-- 清单格式契约（`updater.rs` 消费）：`{ "version": "x.y.z", "assets": { "<本地原始文件名>": "<sha256hex>" } }`，2 空格缩进、中文原样、无末尾换行；键为**纯文件名**（含空格/中文），**严禁带任何本地路径前缀**（v3.6.3 事故：临时脚本把 `d:\code\...` 绝对路径写进键里，路径归一后无法匹配资产名）；GitHub 重写后的资产名（空格→`.`、中文→`_`）由 updater 宽松键归一匹配
 
 **GitHub Release 标题命名规则（红线，2026-11-04 起）**：标题固定为 `v{MAJOR}.{MINOR}.{PATCH} 版本发布`（如 `v3.8.8 版本发布`），**严禁追加描述后缀**（历史 v3.8.2~v3.8.8 曾用「vX · 描述（#issue）」格式，已于 2026-11-04 全部统一回标准格式；后续发布一律不再使用）。
 
@@ -479,10 +471,9 @@ ai-work-assistant/
 - **进程三级关闭策略（F-47，process.rs）**：优雅关闭（taskkill 不带 /F 发 WM_CLOSE，等 3s 让 Electron 正常落盘）→ 树杀（/T /F，等 2s）→ 仍存活则返回 Err 由前端提示人工介入。仅按主程序映像名精确匹配；所有子进程以 CREATE_NO_WINDOW 拉起。
 - **API 模型同步**：官网同步重放 Trae 客户端 `batch_get_detail_param` 配置接口；内置模型 glm-5.3-flash / qwen3.8-flash / Doubao-Seed-Code 不在配置接口响应中，需经 llm_utils_chat 以 `function=solo_agent` 调用补齐。
 - **品牌迁移（v3.0.0）**：identifier `com.traework.assistant`→`com.aiwork.assistant`，数据目录 `%APPDATA%\TraeWorkAssistant`→`AIWorkAssistant`（`state.rs::migrate_legacy_dirs` 启动时**复制**迁移——旧目录原地保留，老应用可继续使用、两版并存；新目录已有数据则跳过；含 WebView2 目录，排除 Cache/GPUCache 等 8 类缓存子目录，复制失败回滚半成品），计划任务由 `misc.rs::try_migrate_legacy_task` 按旧触发时间重建（**旧任务保留**，`task_unregister` 只删新任务）。环境变量统一为 `AIWORKDATA_DIR`。
-- **老安装包升级**：升级兼容按**安装时产品名**判定（非版本号）。NSIS 通过 `build-assets/installer-hooks.nsh` 静默卸载清理旧品牌「Trae Work 助手」安装（已发布的 v2.4.4 及更早均属旧品牌，UTF-8 with BOM）；「AI Work 助手」品牌（v3.0.0 起）走 NSIS 原生原地升级；老 MSI 因 UpgradeCode 随 identifier 变化无法原地升级，需先卸载或改用 NSIS 包升级。打包产物统一输出到 `release/`，使用中文产品名命名 `AI Work 助手_<版本>_x64*`（`scripts/rename_release.mjs`）。
+- **Windows 安装包**：仅构建 MSI，产物统一输出到 `release/`，使用中文产品名命名 `AI Work 助手_<版本>_x64_zh-CN.msi`（`scripts/rename_release.mjs` 校验并输出 SHA256）。`src-tauri/target/release/bundle/` 仅用于构建期临时映射，构建结束后会清理，不再保留安装包副本。
 - **版本线与数据迁移**：新版本自 v3.0.0 起，**之前所有 2.x 版本升级到 3.x 均需数据迁移（安装/首次启动自动完成）**；原「Trae Work 助手」产品线在 `trae_work_main` 分支维护（仅 Trae Work 单应用，2.x.x，仅必要修复），仅使用 Trae Work 的用户可不升级，用该分支的 v2.x.x 最新版本即可。
 - **分支矩阵**：`main` = Windows 主线（默认分支）；`macos_main` = **macOS 产品分支**（F-75 平台支持产品化落地于此——platform 服务层 + 平台门控 + dmg 构建流水线，`build-macos.yml` push 触发产出 aarch64/x64/universal 三 dmg，与 main 保持合并对齐、随 3.6.x 同步发版）；`docker_main` = **Docker 简化分支**（Web-only 单体 `aiwork-server`：管理 REST + OpenAI 网关 + 调度器 + 浏览器 UI，裁剪桌面壳/MITM/账号切换/豆包，独立 1.x 版本线，`docker compose up` 部署）。
-- **NSIS 安装器**：使用自定义模板 `build-assets/installer.nsi`（基于 tauri v2.11.4 上游模板，配置于 tauri.conf.json `bundle.windows.nsis.template`）——升级安装时跳过「卸载旧版/不卸载」选择页，**默认直接覆盖安装**（同版本重装/降级仍显示选择页）。升级 Tauri CLI 后如构建报错，需从对应版本 tag 的 `crates/tauri-bundler/src/bundle/windows/nsis/installer.nsi` 重新同步模板并重做定制。
 - **工具别名是清洗管线新维度（issue #150）**：请求侧 3 透传点（`tools[].function.name` / `tool_choice` / 历史轮 `tool_calls[].function_call.name`）+ 响应侧 4 回改点（sse.rs `stream_convert_src` / `stream_convert_anthropic_src` / `aggregate` / `aggregate_anthropic`）——新增转换点/透传点必须同改，漏一处即客户端按名匹配 tool_calls/tool_use 失败；别名表禁用 `|` 多候选（响应回程须跨主/对冲一致）；`apply_tool_alias_forward` 入参 `&mut Vec<u8>` 整体替换（改写变长，定长切片回写 panic）。Qoder 池经 `apply_tool_alias_forward_value` + wb_sse 回改点同表治理（见 §「请求体改写」末句）。
 - **Qoder 池指纹清洗管线（issue #158）**：Qoder 请求体由 `prepare_qoder_body` 造信封，**不走 Trae 的 `prepare_llm_chat_body`**——清洗走独立入口 `payload::sanitize_openai_body`（messages 文本块 + assistant `tool_calls[].function.arguments` + `tools[].function.description`；不做 function→function_call 改名与 content 形态转换）。清洗打在 `active_peek` 副本上，**原始 `peek` 保留给 `session_ctx` 记账 preview 与 `body_has_image` 门控**（清洗漂移会污染会话键与记账）。种子 `variant_seed("q#{sticky_key:?}", tried.len()-1)` 会话稳定（保护 `session_id_for` 的 first_user_fingerprint 兜底），换号递增逃逸方差；激进门同 Trae（`empty_hits>0 || fp_block_recent("qoder")`）。池级开关 `qoder_sanitize`（默认开、仅内存、重启复位）与 `wb_sanitize` 独立，命令 `sanitize_switches_get` / `sanitize_switch_set`（服务未运行时 get 返回 Err 供前端置灰）。
 - **传输层掐断哨兵（issue #158，code -9902 / `transport cut:`）**：上游 h2 RST_STREAM/连接重置掐断长流，此前被 `InterruptibleLines` 折叠为 EOF → 有内容时补帧静默伪装成功、零内容时误计空完成、**非流式聚合把截断响应当成功交付**（可能含残缺 tool_calls JSON）。**全池接线**（2026-10-30）：① Trae 池 sse.rs 经 `take_read_error()` + `is_transport_cut_text`；② custom 流式直连 `from_reader` 行源 → wb_sse `stream_forward_ex` EOF 兜底 `take_read_error` 上抛；③ Qoder/Buddy/custom 走**竞速/tracked 行源**：`wb_upstream::ReadErrSlot` 共享槽（`chain_rest` 的 `scan` 折叠点留存错误本体并**立即终止拉取**——防持续报错 reader 空转；`lines_with_first_byte_timeout_tracked` + `RaceOutcome/RaceWin/QoderRaceWin.read_slot` 逐层带出），路由层经 `transport_cut_from_slot` / `aggregate_with_transport_cut`（聚合掐断丢弃部分响应）合并进 error_info；Qoder 另经 `QoderTranslate::with_read_slot`（EOF 掐断**不补 [DONE]** + 写 `UpstreamKind::TransportCut` ErrMeta，业务错误优先保留）。routes 层**必须在错误分类/熔断之前预检 `is_transport_cut`**：不冷却、不解绑粘性、不计空完成指纹，按 `sent_any` 分流（有内容就地收尾落账失败 / 零内容换号）。

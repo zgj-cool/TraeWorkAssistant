@@ -110,7 +110,7 @@
 
 | 层 | 选型 |
 | --- | --- |
-| 桌面壳 | Tauri 2（Windows：msi/nsis；macOS：dmg） |
+| 桌面壳 | Tauri 2（Windows：仅 MSI；macOS：dmg） |
 | 前端 | React 18 + TypeScript 5 + Vite 5 + Tailwind 3 + Zustand 4 + Recharts 2 |
 | 后端 | Rust（Tauri 命令层 + 内嵌 HTTP 服务），SQLite（WAL）+ Stronghold 加密保险库 |
 | 网络 | ureq HTTP 客户端 + 内嵌 MITM 代理（自签 CA）+ tokio 流式管道 |
@@ -186,9 +186,8 @@ flowchart LR
 ```powershell
 npm install
 npm run tauri dev      # 开发模式
-npm run tauri build    # 打包（msi + nsis）；Cargo 默认串行编译，避免大项目构建内存不足
-node scripts/rename_release.mjs     # 安装包统一输出到 release/，命名 AI Work 助手_<版本>_x64*
-node scripts/package_portable.mjs   # 便携版 zip（AI Work 助手_<版本>_x64_portable.zip）
+npm run tauri build    # 仅打包 MSI，输出到 release/；Cargo 默认限制为 2 路编译
+node scripts/rename_release.mjs     # 校验 MSI 产物并输出 SHA256
 ```
 
 测试：`cargo test`（Rust 单测）、`npm run test`（vitest 前端）、`npx tsc --noEmit`（类型检查）

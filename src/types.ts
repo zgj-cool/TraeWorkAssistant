@@ -429,8 +429,6 @@ export interface Settings {
   api_default_model: string;
   /** F-74：WorkBuddy/CodeBuddy 切换账号时自动把当前账号会话迁移到目标账号（默认关） */
   buddy_switch_migrate_chats: boolean;
-  /** F-86（issue #175）：静默自动更新——每 2 小时后台检查，空闲时自动下载安装并重启（默认关） */
-  auto_update_silent: boolean;
   /** issue #82 T6.1：会话明细显示首条消息概述（默认开；关闭仅隐藏 UI 展示，不删存量缓存） */
   sessions_preview_enabled: boolean;
   /** Qoder CN IDE 桌面版 exe 手动路径（环境配置页；默认 %LOCALAPPDATA%\Programs\Qoder CN\Qoder CN.exe） */
@@ -679,13 +677,6 @@ export interface ApiLogRecentResult {
   total: number;
   /** true = 达到后端单次解析行数上限，total 仅统计已扫部分 */
   truncated: boolean;
-}
-
-/** F-86：无人值守更新编排单轮结果 */
-export interface UpdateAutoTickResult {
-  /** skipped_cli / skipped_disabled / busy / busy_gateway / no_update / error / installed */
-  action: string;
-  detail: string;
 }
 
 /** 网关外的设备代理日志（与 api_logger 无关） */
@@ -1363,30 +1354,11 @@ export interface OAuthLoginDoneEvent {
   merged?: boolean | null;
 }
 
-// ---- 应用自更新 ----
-export interface UpdateCheckResult {
-  has_update: boolean;
-  current_version: string;
-  latest_version: string;
-  asset_name: string;
-  download_url: string;
-  size: number;
-  release_page: string;
-  // 发布方提供的安装包 SHA256（release 正文约定行；旧版本无此行时缺省，跳过校验）
-  sha256?: string | null;
-}
-
 // API Key 数据文件视图（api_keys_list 返回：列表 + 鉴权开关）
 export interface ApiKeysFileView {
   keys: ApiKeyEntry[];
   // 显式关闭鉴权：仅当无启用 Key 时生效（true=放行，默认 false=拒绝）
   auth_disabled: boolean;
-}
-
-export interface UpdateDownloadProgress {
-  received: number;
-  total: number;
-  percent: number;
 }
 
 // ---- 指纹清洗规则表（wb_template_map KV；合并语义：内置默认表始终生效，自定义表增量覆盖/追加）----
@@ -1453,14 +1425,6 @@ export interface FingerprintSample {
   sample: string;
   /** 模板命中注记（已有规则命中时非空） */
   note: string;
-}
-
-// 下载完成后的安装包信息（update_download 返回，供「确认安装」使用）
-export interface UpdateDownloaded {
-  file_path: string;
-  asset_name: string;
-  size: number;
-  version: string;
 }
 
 // ---- WorkBuddy 账号池（批次1；对应 Rust workbuddy.rs WorkBuddyAccountView）----

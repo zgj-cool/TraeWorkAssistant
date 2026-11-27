@@ -17,7 +17,6 @@ pub mod shared_groups;
 pub mod switch;
 pub mod tags;
 pub mod trae_apps;
-pub mod updater;
 pub mod usage_history;
 pub mod wb_config;
 pub mod workbuddy;

@@ -273,7 +273,7 @@ event:error         流内错误（code:1005 → PlanLimit 等）
 | 依赖 | 要求 | 校验 |
 |---|---|---|
 | Windows | 10 / 11 | `winver` |
-| Node.js | ≥ 18（建议 22） | `node -v` |
+| Node.js | ≥ 20（Volta / .node-version 固定 20.20.2） | `node -v` |
 | Rust | ≥ 1.85 stable（MSVC，Cargo.toml rust-version，edition 2021） | `rustc --version` |
 | VS Build Tools | 「使用 C++ 的桌面开发」+ Windows SDK | 链接错误多因缺失此项 |
 | WebView2 | Win11 自带 / Win10 装 Evergreen Bootstrapper | — |
@@ -281,9 +281,8 @@ event:error         流内错误（code:1005 → PlanLimit 等）
 ```powershell
 npm install
 npm run tauri dev      # 开发模式（Vite 5173 + Rust 热重载；勿裸 npm run dev，白屏）
-npm run tauri build    # 打包 MSI + NSIS → src-tauri/target/release/bundle/
-node scripts/rename_release.mjs    # 产物输出 release/，中文命名
-node scripts/package_portable.mjs  # 便携版 zip
+npm run tauri build    # 仅打包 MSI → release/；构建后清理 target/release/bundle
+node scripts/rename_release.mjs    # 校验 MSI 产物并输出 SHA256
 ```
 
 测试：`cargo test`（Rust）、`npm run test`（vitest 前端）。

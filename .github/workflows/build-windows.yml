@@ -1,4 +1,4 @@
-name: Build Windows EXE
+name: Build Windows MSI
 
 on:
   push:
@@ -35,8 +35,8 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Build Tauri app (NSIS + MSI)
-        run: npm run tauri build -- --bundles nsis,msi
+      - name: Build Tauri app (MSI only)
+        run: npm run tauri build -- --bundles msi
 
       # 审查 M15：CI 缺测试防线——产物未经测试验证即上传。放在 tauri build 之后：
       # generate_context! 宏依赖 frontendDist（../dist，由 beforeBuildCommand 生成）
@@ -45,23 +45,14 @@ jobs:
         working-directory: src-tauri
         run: cargo test --workspace
 
-      # portable zip：零依赖（Windows 自带 tar.exe），从 release 产物打包
-      - name: Package portable zip
-        run: node scripts/package_portable.mjs
-
-      # 审查 M15：统一命名 + 生成发布校验清单 latest.json（单一清单原则，
-      # updater.rs fail-closed 依赖：清单缺失/版本不符/哈希不匹配均拒绝更新）
-      - name: Rename release artifacts + generate latest.json
+      - name: Verify MSI artifact
         run: node scripts/rename_release.mjs --strict
 
       - name: Stage artifacts (release/windows)
         shell: bash
         run: |
           mkdir -p release/windows
-          cp release/*_x64-setup.exe release/windows/
           cp release/*_x64_zh-CN.msi release/windows/
-          cp release/*_x64_portable.zip release/windows/
-          cp release/latest.json release/windows/
 
       # issue #224：保留 release PDB 供崩溃偏移符号化（0xc0000409 类 abort 的
       # 异常偏移仅凭 exe 无法定位，需同版本 PDB；独立 artifact，缺 PDB 不阻断主产物）
