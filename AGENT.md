@@ -360,7 +360,7 @@ ai-work-assistant/
 ## 10. 前端约定
 
 - **store 单例**：`useAppStore` 聚合所有状态；`init()` 在 `App.tsx` `useEffect` 启动一次。
-- **主题系统**：Tailwind 3 + `darkMode:'class'`；`lib/themes.ts` 定义 7 套主题（石墨灰浅色 / 炭黑 / 暗夜紫 / 墨绿 / 琥珀暖夜 / 科技蓝 / 液态玻璃，默认 charcoal），通过 `data-theme` 属性驱动，与 `index.css` 中的覆盖块一一对应——新增主题必须两处同步（深色主题还要在 `main.rs::splash_prefers_dark` 里登记，否则启动页底色会判错）。左下角系统图标弹框（SystemDialog）= Tab1 系统设置（GeneralSettingsPanel：外观/语言/通知/代理）+ Tab2 系统日志（复用 Logs 页）。
+- **主题系统**：Tailwind 3 + `darkMode:'class'`；`lib/themes.ts` 定义 7 套主题（浅色 / 深色 / 暗夜紫 / 墨绿 / 科技蓝 / 荧光墨绿 / 荧光浅蓝，默认 charcoal=深色；id 沿用 graphite/charcoal 以兼容旧存档），通过 `data-theme` 属性驱动，与 `index.css` 中的覆盖块一一对应——新增主题必须两处同步（深色主题还要在 `main.rs::splash_prefers_dark` 里登记，否则启动页底色会判错）。左下角系统图标弹框（SystemDialog）= Tab1 系统设置（GeneralSettingsPanel：应用显示/通知/代理，保存条固定在滚动区之外；主题改由侧栏调色盘气泡切换）+ Tab2 系统日志（复用 Logs 页）。
 - **视觉基座（清爽化）**：圆角/投影/描边/控件观感统一收口在 `index.css` 的 `:root`（`--radius-card` / `--radius-control`）与 `@layer components`（`.card` / `.btn-*` / `.input` / `.label` / `.chip`）；改公共观感优先改这里，不要在页面里逐处覆盖。品牌标识统一走 `components/BrandMark.tsx`（TitleBar / 启动页共用）。徽标（`Badge`）走「浅底 + 同色发丝描边」，指标卡（`StatCard`）靠小圆点承载语义色、数值统一中性色以保可读性。
 - **两处全局可读性覆盖（不要删）**：`index.css` 末尾 `@layer utilities` 里的 `:where(html:not(.dark)) body .text-slate-400`（浅色压深到 slate-500）与 `:where(html.dark) body .text-zinc-500`（深色提亮到 zinc-400）——特异度刻意设为 (0,1,1)：压过基础工具类、但不影响 `hover:` / `focus:` 等状态变体。新增文字色阶时优先复用这两档语义，不要在页面里再手写更浅的灰。
 - **分段切换统一走 `components/ui.tsx::SegmentedTabs`**（Tab / 数据源 / 日期范围）：浅槽 + 白色胶囊选中态，支持 `disabled` + `title`；新页面不要再手拼 `flex rounded-lg bg-slate-100 p-1` + 白底按钮。表格表头统一用 `border-b border-slate-200/70 bg-slate-50/70 text-[11.5px] font-medium ...`（已全局铺开到 14 个数据表）；表格内徽标由 `td .chip` 自动加密（px-1.5 / 11px），无需逐处覆盖。

@@ -34,7 +34,7 @@
 
 /* ---------- 主题覆盖 ---------- */
 
-/* 石墨灰（浅色）：冷灰基调的浅色主题 */
+/* 浅色：冷灰基调（id 沿用 graphite，兼容旧存档） */
 html[data-theme='graphite'] {
   color-scheme: light;
   --c-slate-50: 247 247 248;
@@ -43,7 +43,7 @@ html[data-theme='graphite'] {
   --c-slate-300: 183 183 190;
 }
 
-/* 炭黑（深色）：默认 zinc，无需覆盖 */
+/* 深色：默认 zinc，无需覆盖（id 沿用 charcoal，兼容旧存档） */
 
 /* 暗夜紫（深色） */
 html.dark[data-theme='violet-night'] {
@@ -67,17 +67,6 @@ html.dark[data-theme='ink-green'] {
   --c-zinc-100: 196 232 214;
 }
 
-/* 琥珀暖夜（深色） */
-html.dark[data-theme='amber-night'] {
-  color-scheme: dark;
-  --c-zinc-950: 23 16 8;
-  --c-zinc-900: 36 26 14;
-  --c-zinc-800: 58 44 23;
-  --c-zinc-700: 87 67 34;
-  --c-zinc-200: 243 232 211;
-  --c-zinc-100: 238 221 185;
-}
-
 /* 科技蓝（深色） */
 html.dark[data-theme='tech-blue'] {
   color-scheme: dark;
@@ -89,26 +78,29 @@ html.dark[data-theme='tech-blue'] {
   --c-zinc-100: 194 217 250;
 }
 
-/* 液态玻璃（深色）：极夜冷调底 + 青绿折射光。基色维持 zinc-950（#09090b），
+/* 荧光墨绿（深色）：深绿夜色仪表盘。基色取极深墨绿而非纯黑，
    与 Rust splash_background / index.html 首屏骨架同色，避免启动跳色；
-   玻璃质感全部靠「叠加层 + 表面透明度」表达，不移动任何布局尺寸。 */
-html.dark[data-theme='liquid-glass'] {
+   强调色只有荧光薄荷绿一支，靠亮度分级拉开层次。 */
+html.dark[data-theme='neon-forest'] {
   color-scheme: dark;
-  --c-zinc-950: 9 9 11;
-  --c-zinc-900: 14 20 27;
-  --c-zinc-800: 21 30 41;
-  --c-zinc-700: 36 49 65;
-  --c-zinc-200: 214 236 241;
-  --c-zinc-100: 232 247 250;
+  --c-zinc-950: 4 18 12;
+  --c-zinc-900: 7 26 18;
+  --c-zinc-800: 12 38 27;
+  --c-zinc-700: 20 56 40;
+  --c-zinc-200: 214 242 228;
+  --c-zinc-100: 233 251 243;
+}
 
-  /* 玻璃专用令牌：表面 / 高光 / 强调色 */
-  --glass-surface: 255 255 255;
-  --glass-accent: 111 242 221; /* 液态青 */
-  --glass-accent-2: 122 162 255; /* 冷水蓝 */
-
-  /* 玻璃面板更圆一档，边缘高光才顺 */
-  --radius-card: 16px;
-  --radius-control: 10px;
+/* 荧光浅蓝（深色）：与「荧光墨绿」同一套结构，底色同为深色玻璃，强调色取浅蓝。
+   基色同样取极深色而非纯黑，与 Rust splash_background 同色，避免启动跳色。 */
+html.dark[data-theme='neon-ocean'] {
+  color-scheme: dark;
+  --c-zinc-950: 4 9 18;
+  --c-zinc-900: 7 17 26;
+  --c-zinc-800: 12 27 38;
+  --c-zinc-700: 20 40 56;
+  --c-zinc-200: 214 228 242;
+  --c-zinc-100: 233 243 251;
 }
 
 html,
@@ -256,6 +248,17 @@ html.dark a:focus-visible {
    两侧带 opacity:0 的入场会让交接瞬间只剩底色（深色主题下即黑闪）。 */
 
 @layer components {
+  /* 主题气泡（侧栏调色盘）：默认主题下的玻璃底。
+     荧光墨绿主题另有一段更透的覆盖（见文件末尾该主题块），这里只保底：
+     其它 6 套主题没有 backdrop 环境光，必须给一层可见的面，否则气泡会糊进背景。 */
+  .theme-pop {
+    background: rgba(255, 255, 255, 0.92);
+    border-color: rgb(226 232 240 / 0.8);
+  }
+  html.dark .theme-pop {
+    background: rgba(24, 24, 27, 0.92);
+    border-color: rgb(63 63 70 / 0.7);
+  }
   .splash-bar {
     @apply relative block h-[2px] w-[188px] overflow-hidden rounded-full bg-slate-300/70 dark:bg-zinc-700/60;
   }
@@ -292,320 +295,633 @@ html.dark a:focus-visible {
 }
 
 /* ==========================================================================
-   液态玻璃主题（第 7 套 · liquid-glass）
+   荧光墨绿主题（第 7 套 · neon-forest）
    --------------------------------------------------------------------------
-   结构分三层，缺一层就会退化成「半透明黑卡片」：
-     ① 折射底：极夜里缓慢漂移的青绿 / 冰蓝光体（body::before）
-     ② 颗粒层：细噪点覆盖，消除大面积渐变的塑料感（body::after）
-     ③ 玻璃面：半透渐变 + 内缘高光 + 外缘冷投影（顶栏/侧栏再叠 backdrop-blur）
+   视觉来源：深绿夜景仪表盘。要点是五件事，缺一件就会退化成「普通深绿卡片」：
+     ① 底色不是纯黑而是极深的墨绿（#04120c 一档），四周压暗、中心微亮；
+     ② 强调色是荧光薄荷绿，面积要够大：卡片顶部渐变、表头文字、选中态、
+        主按钮、滚动条都带绿，只有「整屏铺满」才会廉价，点状分布则显单薄；
+     ③ 卡片是半透的磨砂玻璃：背后环境光透上来，靠 blur + 内缘高光成立，
+        不用重投影（重投影会把玻璃压成普通卡片）；
+     ④ 文案分三级亮度（88% / 60% / 40%），靠亮度差拉层次而不是靠色相；
+     ⑤ 外层壳（标题栏/侧栏）比内容更暗，内容才「浮」得出来。
    所有规则写在 @layer 之外：无层级样式恒优先于 Tailwind 工具类，
    因此无需 !important 即可压过组件里写死的 dark:bg-zinc-950 等类名。
-   模糊只给顶栏与侧栏这类「少量固定块」；卡片与表格行一律不模糊——
-   WebView2 上每个模糊面都是独立离屏图层，背后极光又在动，几十张卡片会直接掉帧。
-   卡片靠半透 + 渐变 + 高光边表达玻璃，肉眼效果相同而开销接近零。
+
+   关于 backdrop-filter 与 fixed 后代：blur 会把 position:fixed 的包含块
+   改成该元素自身。本项目所有 fixed 浮层（Modal / 积分明细 / 账号浮层 /
+   图标选择）都已 createPortal 到 body，因此卡片上的模糊不会再让它们错位。
    ========================================================================== */
 
-html[data-theme='liquid-glass'] {
-  /* html 铺底色、body 透明：负 z-index 的极光层才能落在两者之间 */
-  background-color: #09090b;
+html[data-theme='neon-forest'] {
+  /* 铺底色、body 透明：负 z-index 的环境光层才能落在两者之间 */
+  background-color: #04120c;
 }
 
-html[data-theme='liquid-glass'] body {
+html[data-theme='neon-forest'] body {
   background: transparent;
-  color: #d6ecf1;
+  color: #d6f2e4;
 }
 
-@keyframes glass-drift {
-  0% {
-    transform: translate3d(-1.5%, -1%, 0) scale(1);
-  }
-  50% {
-    transform: translate3d(1.5%, 1.5%, 0) scale(1.06);
-  }
-  100% {
-    transform: translate3d(-0.5%, 2%, 0) scale(1.02);
-  }
-}
-
-/* ① 折射底：大半径径向渐变本身就是柔和的，不再叠 filter:blur——
-   全屏动画元素每帧重算一次高斯模糊，在核显 WebView2 上会明显掉帧。
-   inset 只放大 8%：光体坐标才和视口对得上（放大越多，百分比越容易被稀释）。
-   三个光体分别压在内容区上/中/下，卡片才有「背后有光」的透亮感。 */
-html[data-theme='liquid-glass'] body::before {
+/* 环境光：静态，不做漂移动画。
+   绿色占比主要靠这一层——它透过半透磨砂卡片渗上来，比在卡片上直接铺绿更通透，
+   也不会压低文字对比度。
+   为什么不做动画：卡片已带 backdrop-filter，任何位于模糊层下方的动画元素都会
+   让每张卡片的离屏模糊逐帧重算（Chromium 无法复用 backdrop 缓存）。一屏十几张
+   卡片 + 全屏动画 = 明显掉帧，而磨砂本身已经把这层光糊得很柔，肉眼分辨不出漂移。
+   多铺两层渐变代替动画来维持层次。 */
+html[data-theme='neon-forest'] body::before {
   content: '';
   position: fixed;
-  inset: -8%;
+  inset: -10%;
   z-index: -1;
   pointer-events: none;
   background:
-    radial-gradient(46% 40% at 56% 22%, rgb(var(--glass-accent) / 0.34), transparent 70%),
-    radial-gradient(40% 42% at 92% 58%, rgb(var(--glass-accent-2) / 0.3), transparent 72%),
-    radial-gradient(52% 44% at 48% 88%, rgba(14, 104, 98, 0.4), transparent 72%),
-    radial-gradient(34% 34% at 22% 76%, rgba(48, 76, 148, 0.28), transparent 74%);
-  animation: glass-drift 34s ease-in-out infinite alternate;
+    radial-gradient(46% 40% at 60% 26%, rgba(34, 186, 116, 0.475), transparent 66%),
+    radial-gradient(40% 36% at 24% 74%, rgba(23, 141, 99, 0.399), transparent 68%),
+    radial-gradient(64% 52% at 50% 106%, rgba(17, 104, 70, 0.475), transparent 70%),
+    radial-gradient(30% 26% at 88% 82%, rgba(38, 203, 133, 0.285), transparent 72%),
+    radial-gradient(24% 22% at 38% 46%, rgba(28, 161, 106, 0.209), transparent 74%);
 }
 
-/* ② 颗粒层（tile 噪点，单次栅格化后平铺，几乎零成本） */
-html[data-theme='liquid-glass'] body::after {
+/* 极细网纹：给大面积深色底一点织物感，平铺后几乎零开销 */
+html[data-theme='neon-forest'] body::after {
   content: '';
   position: fixed;
   inset: 0;
   z-index: -1;
   pointer-events: none;
-  opacity: 0.42;
-  mix-blend-mode: soft-light;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23n)' opacity='0.55'/%3E%3C/svg%3E");
-  background-size: 180px 180px;
+  opacity: 0.55;
+  background-image:
+    linear-gradient(rgba(56, 219, 144, 0.036) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(56, 219, 144, 0.036) 1px, transparent 1px);
+  background-size: 44px 44px;
+  mask-image: radial-gradient(78% 68% at 50% 42%, #000 18%, transparent 100%);
+  -webkit-mask-image: radial-gradient(78% 68% at 50% 42%, #000 18%, transparent 100%);
 }
 
-/* 外壳透明，让极光透上来 */
-html[data-theme='liquid-glass'] .app-shell {
+html[data-theme='neon-forest'] .app-shell {
   background: transparent;
 }
 
-/* ③ 玻璃面 —— 顶栏 / 标题栏：厚玻璃（28px 模糊 + 200% 饱和是液态玻璃的关键，
-   饱和度拉高后背后极光的青色才会被「吸」进玻璃里，单纯模糊只会发灰） */
-html[data-theme='liquid-glass'] .app-titlebar,
-html[data-theme='liquid-glass'] .app-topbar {
+/* ---------- 外壳：不做模糊，只叠半透色 ----------
+   磨砂只给「卡片 / 弹窗」这类真正浮在内容之上的容器。外壳（标题栏 / 顶栏 /
+   侧栏）是全屏固定的框架，给它加 backdrop-filter 有两笔账：
+     ① 背后是页面最底层，模糊只会把极光糊淡，等于白花一次离屏合成的钱；
+     ② 侧栏背后永远是内容区边缘，透不出任何有用的东西，只会显脏。
+   所以这里只留半透明叠色——环境光从底下一路透到侧栏里，才会自然。 */
+html[data-theme='neon-forest'] .app-titlebar {
+  background: rgba(3, 16, 10, 0.42);
+  border-bottom-color: rgba(59, 230, 152, 0.285);
+  box-shadow: inset 0 -8px 16px -14px rgba(59, 230, 152, 0.57);
+}
+
+/* 顶栏透明：它横跨侧栏与内容区，一旦有底色就会在侧栏顶部压出一条横带，
+   与 8px 下方的内容区产生色差。透明后三者共享同一片背景光。 */
+html[data-theme='neon-forest'] .app-topbar {
+  background: transparent;
+  border-bottom-color: rgba(59, 230, 152, 0.171);
+}
+
+html[data-theme='neon-forest'] .app-sidebar {
+  /* 侧栏完全透明，背景光一体化：
+     侧栏自己铺任何半透明色都会在「侧栏 / 内容区」之间形成一道可见的亮度台阶
+     （左暗右亮，像两块拼接）。这里让侧栏彻底透明、只留一条分隔线，环境光
+     就从最底层连续地铺满整屏，左侧菜单和右侧内容共享同一片荧光，不再各持一团。 */
+  background: transparent;
+  border-right-color: rgba(59, 230, 152, 0.209);
+  box-shadow: inset -1px 0 0 rgba(59, 230, 152, 0.095);
+}
+
+/* ---------- 卡片：半透磨砂玻璃 ---------- */
+html[data-theme='neon-forest'] .card {
   background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.085) 0%, rgba(255, 255, 255, 0) 58%),
-    rgba(8, 13, 18, 0.62);
-  border-color: rgba(255, 255, 255, 0.11);
-  backdrop-filter: blur(28px) saturate(185%);
-  -webkit-backdrop-filter: blur(28px) saturate(185%);
+    linear-gradient(160deg, rgba(59, 230, 152, 0.095) 0%, rgba(59, 230, 152, 0.021) 44%, transparent 72%),
+    rgba(7, 26, 18, 0.5);
+  border: 1px solid rgba(59, 230, 152, 0.19);
+  backdrop-filter: blur(10px) saturate(140%);
+  -webkit-backdrop-filter: blur(10px) saturate(140%);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.26),
-    inset 0 -1px 1px rgba(255, 255, 255, 0.08);
+    inset 0 1px 0 rgba(255, 255, 255, 0.07),
+    inset 0 -1px 0 rgba(59, 230, 152, 0.057),
+    0 12px 28px -20px rgba(0, 0, 0, 0.85);
 }
 
-/* 标题栏下沿的一线冷光：玻璃边缘被光「切」开的感觉 */
-html[data-theme='liquid-glass'] .app-titlebar {
-  border-bottom-color: rgb(var(--glass-accent) / 0.24);
-}
-
-html[data-theme='liquid-glass'] .app-sidebar {
+html[data-theme='neon-forest'] .card-hover:hover {
+  border-color: rgba(59, 230, 152, 0.475);
   background:
-    linear-gradient(200deg, rgba(255, 255, 255, 0.1) 0%, rgba(255, 255, 255, 0) 52%),
-    rgba(9, 14, 20, 0.52);
-  border-right-color: rgba(255, 255, 255, 0.12);
-  backdrop-filter: blur(28px) saturate(185%);
-  -webkit-backdrop-filter: blur(28px) saturate(185%);
+    linear-gradient(160deg, rgba(59, 230, 152, 0.162) 0%, rgba(59, 230, 152, 0.038) 44%, transparent 72%),
+    rgba(9, 32, 22, 0.55);
   box-shadow:
-    inset 1px 0 0 rgba(255, 255, 255, 0.14),
-    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    0 0 0 1px rgba(59, 230, 152, 0.285),
+    0 16px 36px -22px rgba(59, 230, 152, 0.38),
+    0 12px 28px -20px rgba(0, 0, 0, 0.85);
 }
 
-/* 卡片：参考稿的 135° 高光渐变 + 上缘强高光 + 下缘弱高光保留，
-   但白色基底压到很低并垫一层深底：参考稿是「深色字压浅色玻璃」，
-   本主题是「浅色字压深色玻璃」，白色基底过量会把极光洗成灰白、
-   整片界面发灰发亮，反而丢掉玻璃的通透感。
-   外投影刻意压得很轻：玻璃靠「边缘高光 + 背后透光」立起来，重阴影会把它压成
-   普通卡片。用 -8px 的负扩散把投影收在卡片脚下，避免整屏发浑。 */
-html[data-theme='liquid-glass'] .card {
+/* 弹窗：遮罩压成墨绿（遮罩本身是「背景暗化」不是面板背景，保留） */
+html[data-theme='neon-forest'] .modal-scrim {
+  background: rgba(2, 9, 6, 0.62);
+  backdrop-filter: blur(10px) saturate(140%);
+  -webkit-backdrop-filter: blur(10px) saturate(140%);
+}
+
+/* 弹出层（弹窗面板 / 主题气泡 / 其它 portal 浮层）统一表面：
+   不铺实心背景色——磨砂本身就是那层「面」，再加一层实色会把背后的环境光
+   完全挡住，透光感全失、只剩一块扁平色块。只留：
+     · 极淡的绿色高光渐变（定方向感）
+     · 一点点纯色（5%~8%，保证密集文字的区域仍有足够对比）
+   所有弹出层共用同一条规则，避免各处「看着差不多但色值不同」。 */
+html[data-theme='neon-forest'] .modal-panel,
+html[data-theme='neon-forest'] .theme-pop {
   background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.115) 0%, rgba(255, 255, 255, 0) 55%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.026), rgba(255, 255, 255, 0.008)),
-    rgba(6, 10, 15, 0.62);
-  border: 1px solid rgba(255, 255, 255, 0.14);
+    linear-gradient(155deg, rgba(59, 230, 152, 0.095) 0%, rgba(59, 230, 152, 0.019) 46%, transparent 74%),
+    rgba(5, 20, 14, 0.28);
+  border: 1px solid rgba(59, 230, 152, 0.285);
+  backdrop-filter: blur(22px) saturate(170%);
+  -webkit-backdrop-filter: blur(22px) saturate(170%);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.36),
-    inset 0 -1px 1px rgba(255, 255, 255, 0.09),
-    0 8px 20px -10px rgba(4, 7, 11, 0.42);
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 0 42px -18px rgba(59, 230, 152, 0.285),
+    0 24px 60px -28px rgba(0, 0, 0, 0.9);
 }
 
-html[data-theme='liquid-glass'] .card-hover:hover {
-  border-color: rgb(var(--glass-accent) / 0.3);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.4),
-    0 12px 28px -12px rgba(4, 7, 11, 0.5),
-    0 8px 24px -14px rgb(var(--glass-accent) / 0.16);
+/* 弹窗里的卡片不再叠第二层玻璃（否则层层叠加糊成一片） */
+html[data-theme='neon-forest'] .modal-panel .card {
+  background: rgba(255, 255, 255, 0.028);
+  border-color: rgba(59, 230, 152, 0.152);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow: none;
 }
 
-/* 弹窗：真正撑得起 28px 模糊的场景只剩这里——一屏只有一个，模糊开销可忽略，
-   而且必须让「背后的列表被糊掉」才有玻璃悬浮在界面之上的空间感。
-   遮罩同步加深：模糊不加深压暗，底层内容会透成一片灰雾。 */
-html[data-theme='liquid-glass'] .modal-scrim {
-  background: rgba(2, 5, 8, 0.52);
-  backdrop-filter: blur(14px) saturate(120%);
-  -webkit-backdrop-filter: blur(14px) saturate(120%);
-}
-
-/* 弹窗面板：真正撑得起 28px 模糊的场景只剩这里——一屏只有一个，模糊开销可忽略，
-   而且必须让「背后的列表被糊掉」才有玻璃悬浮在界面之上的空间感。
-   表面比参考稿多垫一层暗底：参考稿是「深字压浅玻璃」，这里沿用深色主题的浅字，
-   纯白玻璃会让正文与底色同为浅灰、字浮不起来。暗底只压到刚好托住文字。
-   作用域用 .modal-panel 而非 [role=dialog]——设置面板里的图标选择弹窗尺寸很小，
-   套同一套厚玻璃会糊成白块。 */
-html[data-theme='liquid-glass'] .modal-panel {
-  background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.2) 0%, rgba(255, 255, 255, 0) 55%),
-    rgba(7, 12, 18, 0.7);
-  border: 1px solid rgba(255, 255, 255, 0.3);
-  backdrop-filter: blur(28px) saturate(185%);
-  -webkit-backdrop-filter: blur(28px) saturate(185%);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.46),
-    inset 0 -1px 1px rgba(255, 255, 255, 0.14),
-    0 14px 36px -14px rgba(0, 0, 0, 0.62);
-}
-
-/* 弹窗里的卡片是一层「嵌在玻璃里的玻璃」，白度必须压下去，否则层层叠加会糊成白块 */
-html[data-theme='liquid-glass'] .modal-panel .card {
-  background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.075) 0%, rgba(255, 255, 255, 0) 55%),
-    rgba(255, 255, 255, 0.028);
-  border-color: rgba(255, 255, 255, 0.12);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.16),
-    0 6px 16px -8px rgba(0, 0, 0, 0.5);
-}
-
-/* 弹窗内的输入框：玻璃面板已是浅色，输入槽保持深色才有「凹进去」的层次 */
-html[data-theme='liquid-glass'] .modal-panel .input {
-  background: rgba(4, 9, 14, 0.55);
+/* ---------- 按钮：主按钮是整屏最亮的荧光块 ---------- */
+html[data-theme='neon-forest'] .btn-primary {
+  background: linear-gradient(135deg, #51f2ab 0%, #3be698 52%, #1fcd7f 100%);
+  color: #03170f;
   border-color: rgba(255, 255, 255, 0.22);
+  font-weight: 600;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.42),
+    0 8px 26px -8px rgba(59, 230, 152, 0.684);
 }
 
-/* 弹窗内表格表头：深色主题的 zinc 表头压在浅玻璃上会脏，改成极淡的白色雾面 */
-html[data-theme='liquid-glass'] .modal-panel thead {
-  background: rgba(255, 255, 255, 0.06);
-}
-
-/* 按钮：主按钮是「发光液态胶囊」，其余是薄玻璃 */
-html[data-theme='liquid-glass'] .btn-primary {
-  background: linear-gradient(135deg, rgb(var(--glass-accent) / 0.92), rgb(var(--glass-accent-2) / 0.82));
-  color: #04100f;
-  border: 1px solid rgba(255, 255, 255, 0.24);
+html[data-theme='neon-forest'] .btn-primary:hover {
+  background: linear-gradient(135deg, #68f2b8 0%, #4befa7 52%, #2cdf8f 100%);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.5),
-    0 8px 22px -10px rgb(var(--glass-accent) / 0.5);
+    0 10px 32px -6px rgba(59, 230, 152, 0.855);
+}
+
+html[data-theme='neon-forest'] .btn-primary:active {
+  background: linear-gradient(135deg, #42e297 0%, #31d285 52%, #1bb772 100%);
+}
+
+html[data-theme='neon-forest'] .btn-outline {
+  background: rgba(59, 230, 152, 0.085);
+  border-color: rgba(59, 230, 152, 0.38);
+  color: #adedcd;
+}
+
+html[data-theme='neon-forest'] .btn-outline:hover {
+  background: rgba(59, 230, 152, 0.171);
+  border-color: rgba(59, 230, 152, 0.646);
+  color: #d8ffee;
+}
+
+html[data-theme='neon-forest'] .btn-ghost {
+  color: rgba(214, 242, 228, 0.7);
+}
+
+html[data-theme='neon-forest'] .btn-ghost:hover {
+  background: rgba(59, 230, 152, 0.133);
+  color: #d8ffee;
+}
+
+html[data-theme='neon-forest'] .btn-danger {
+  background: #f2543e;
+  color: #1a0603;
+}
+
+/* ---------- 输入类控件：比面板更暗的「凹槽」，边框带绿 ---------- */
+html[data-theme='neon-forest'] .input {
+  background: rgba(2, 12, 7, 0.72);
+  border-color: rgba(59, 230, 152, 0.266);
+  color: #eafff5;
+}
+
+html[data-theme='neon-forest'] .input:hover {
+  border-color: rgba(59, 230, 152, 0.399);
+}
+
+html[data-theme='neon-forest'] .input:focus {
+  border-color: #3be698;
+  box-shadow: 0 0 0 3px rgba(59, 230, 152, 0.209);
+}
+
+html[data-theme='neon-forest'] .input::placeholder {
+  color: rgba(214, 242, 228, 0.34);
+}
+
+html[data-theme='neon-forest'] .label {
+  color: rgba(214, 242, 228, 0.62);
+}
+
+/* ---------- 选中态：荧光铺满当前项 ---------- */
+html[data-theme='neon-forest'] .app-sidebar [data-nav-active] {
+  background: linear-gradient(90deg, rgba(59, 230, 152, 0.21), rgba(59, 230, 152, 0.048) 78%);
+  color: #eafff5;
   font-weight: 600;
 }
 
-html[data-theme='liquid-glass'] .btn-primary:hover {
-  background: linear-gradient(135deg, rgb(var(--glass-accent) / 1), rgb(var(--glass-accent-2) / 0.92));
+html[data-theme='neon-forest'] .nav-indicator {
+  background: #3be698;
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.62),
-    0 10px 26px -8px rgb(var(--glass-accent) / 0.62);
+    0 0 14px rgba(59, 230, 152, 0.95),
+    0 0 26px rgba(59, 230, 152, 0.57);
 }
 
-html[data-theme='liquid-glass'] .btn-outline {
-  background: rgba(255, 255, 255, 0.03);
-  border-color: rgba(255, 255, 255, 0.09);
-  color: #c3dde4;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
-}
-
-html[data-theme='liquid-glass'] .btn-outline:hover {
-  background: rgba(255, 255, 255, 0.06);
-  border-color: rgb(var(--glass-accent) / 0.3);
-}
-
-html[data-theme='liquid-glass'] .btn-ghost {
-  color: rgba(195, 221, 228, 0.72);
-}
-
-html[data-theme='liquid-glass'] .btn-ghost:hover {
-  background: rgba(255, 255, 255, 0.06);
-  color: #eafcff;
-}
-
-/* 输入类控件：内凹玻璃槽，聚焦时泛青光 */
-html[data-theme='liquid-glass'] .input {
-  background: rgba(4, 8, 11, 0.5);
-  border-color: rgba(255, 255, 255, 0.11);
-  color: #eafcff;
-  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.55);
-}
-
-html[data-theme='liquid-glass'] .input:focus {
-  border-color: rgb(var(--glass-accent) / 0.55);
+/* 分段控件（页面内 Tab：今日 / 近 7 天 等）的选中胶囊。
+   这一块是整屏除主按钮外面积最大的实心荧光，满亮度的薄荷绿在深底上会「跳」出
+   界面，压到约 0.85 倍后与四周玻璃面同属一个亮度层级；深色文字 #03170f 在
+   新值上对比度仍 >7:1，可读性不受影响。 */
+html[data-theme='neon-forest'] [aria-pressed='true'] {
+  background: linear-gradient(180deg, #45ce91, #2bbb78);
+  color: #03170f;
+  font-weight: 600;
   box-shadow:
-    inset 0 1px 2px rgba(0, 0, 0, 0.5),
-    0 0 0 3px rgb(var(--glass-accent) / 0.15);
+    inset 0 1px 0 rgba(255, 255, 255, 0.28),
+    0 2px 12px -3px rgba(59, 230, 152, 0.45);
 }
 
-html[data-theme='liquid-glass'] .input::placeholder {
-  color: rgba(214, 236, 241, 0.34);
+html[data-theme='neon-forest'] .app-tabbar {
+  background: rgba(2, 12, 7, 0.6);
+  border: 1px solid rgba(59, 230, 152, 0.209);
 }
 
-/* 分段控件的选中胶囊：被托起来的那一小块玻璃 */
-html[data-theme='liquid-glass'] [aria-pressed='true'] {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.032));
-  color: #f2ffff;
+/* 左下角应用 Tab 的选中项：同样只保留「被托起来」的暗示，不做满亮实心 */
+html[data-theme='neon-forest'] .app-tabbar [data-tab-active] {
+  background: rgba(59, 230, 152, 0.17);
+  color: #eafff5;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+/* ---------- 表格：表头是一条透绿的窄带，行悬停泛绿 ---------- */
+html[data-theme='neon-forest'] .app-main thead {
+  background: linear-gradient(180deg, rgba(59, 230, 152, 0.133), rgba(59, 230, 152, 0.048));
+  border-color: rgba(59, 230, 152, 0.285);
+}
+
+html[data-theme='neon-forest'] .app-main thead th {
+  color: #86f2bc;
+}
+
+html[data-theme='neon-forest'] .app-main .row-hover:hover {
+  background: rgba(59, 230, 152, 0.095);
+}
+
+/* 徽标不覆盖：`components/ui.tsx::toneMap` 里的成功 / 警告 / 危险语义色
+   （emerald / amber / rose）特异度只有 (0,2,0)，被主题里的 .chip 一刀切会全部退成灰，
+   状态就分不出来了。让语义色原样保留，只在深绿底上由全局可读性规则兜住对比度。 */
+
+/* ---------- 滚动条 / 选区 / 焦点环 ---------- */
+html[data-theme='neon-forest'] ::-webkit-scrollbar-thumb {
+  background: rgba(59, 230, 152, 0.399);
+}
+
+html[data-theme='neon-forest'] ::-webkit-scrollbar-thumb:hover {
+  background: rgba(59, 230, 152, 0.684);
+}
+
+html[data-theme='neon-forest'] ::selection {
+  background: rgba(59, 230, 152, 0.323);
+  color: #eafff5;
+}
+
+html[data-theme='neon-forest'] button:focus-visible,
+html[data-theme='neon-forest'] a:focus-visible {
+  outline-color: #3be698;
+}
+
+/* 气泡内选中项：表面已统一到上面的弹出层规则，这里只管选中态配色 */
+html[data-theme='neon-forest'] .theme-pop button[aria-current='true'] {
+  background: rgba(59, 230, 152, 0.152);
+  color: #eafff5;
+}
+
+
+/* ==========================================================================
+   荧光浅蓝主题（第 8 套 · neon-ocean）
+   --------------------------------------------------------------------------
+   视觉来源：与「荧光墨绿」同一套结构，底色同样是深色玻璃，但强调色取浅蓝（天蓝）而非饱和深蓝。要点是五件事，缺一件就会退化成「普通深色卡片」：
+     ① 底色不是纯黑而是极深的藏蓝（#0c1726 一档），四周压暗、中心微亮；
+     ② 强调色是浅蓝（天蓝），面积要够大：卡片顶部渐变、表头文字、选中态、
+        主按钮、滚动条都带蓝，只有「整屏铺满」才会廉价，点状分布则显单薄；
+     ③ 卡片是半透的磨砂玻璃：背后环境光透上来，靠 blur + 内缘高光成立，
+        不用重投影（重投影会把玻璃压成普通卡片）；
+     ④ 文案分三级亮度（88% / 60% / 40%），靠亮度差拉层次而不是靠色相；
+     ⑤ 外层壳（标题栏/侧栏）比内容更暗，内容才「浮」得出来。
+   所有规则写在 @layer 之外：无层级样式恒优先于 Tailwind 工具类，
+   因此无需 !important 即可压过组件里写死的 dark:bg-zinc-950 等类名。
+
+   关于 backdrop-filter 与 fixed 后代：blur 会把 position:fixed 的包含块
+   改成该元素自身。本项目所有 fixed 浮层（Modal / 积分明细 / 账号浮层 /
+   图标选择）都已 createPortal 到 body，因此卡片上的模糊不会再让它们错位。
+   ========================================================================== */
+
+html[data-theme='neon-ocean'] {
+  /* 铺底色、body 透明：负 z-index 的环境光层才能落在两者之间 */
+  background-color: #0c1726;
+}
+
+html[data-theme='neon-ocean'] body {
+  background: transparent;
+  color: #d6e1f2;
+}
+
+/* 环境光：静态，不做漂移动画。
+   浅蓝占比主要靠这一层——它透过半透磨砂卡片渗上来，比在卡片上直接铺蓝更通透，
+   也不会压低文字对比度。
+   为什么不做动画：卡片已带 backdrop-filter，任何位于模糊层下方的动画元素都会
+   让每张卡片的离屏模糊逐帧重算（Chromium 无法复用 backdrop 缓存）。一屏十几张
+   卡片 + 全屏动画 = 明显掉帧，而磨砂本身已经把这层光糊得很柔，肉眼分辨不出漂移。
+   多铺两层渐变代替动画来维持层次。 */
+html[data-theme='neon-ocean'] body::before {
+  content: '';
+  position: fixed;
+  inset: -10%;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(46% 40% at 60% 26%, rgba(67, 126, 201, 0.475), transparent 66%),
+    radial-gradient(40% 36% at 24% 74%, rgba(44, 91, 162, 0.399), transparent 68%),
+    radial-gradient(64% 52% at 50% 106%, rgba(34, 72, 125, 0.475), transparent 70%),
+    radial-gradient(30% 26% at 88% 82%, rgba(85, 137, 205, 0.285), transparent 72%),
+    radial-gradient(24% 22% at 38% 46%, rgba(51, 107, 182, 0.209), transparent 74%);
+}
+
+/* 极细网纹：给大面积深色底一点织物感，平铺后几乎零开销 */
+html[data-theme='neon-ocean'] body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  opacity: 0.55;
+  background-image:
+    linear-gradient(rgba(114, 158, 214, 0.036) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(114, 158, 214, 0.036) 1px, transparent 1px);
+  background-size: 44px 44px;
+  mask-image: radial-gradient(78% 68% at 50% 42%, #000 18%, transparent 100%);
+  -webkit-mask-image: radial-gradient(78% 68% at 50% 42%, #000 18%, transparent 100%);
+}
+
+html[data-theme='neon-ocean'] .app-shell {
+  background: transparent;
+}
+
+/* ---------- 外壳：不做模糊，只叠半透色 ----------
+   磨砂只给「卡片 / 弹窗」这类真正浮在内容之上的容器。外壳（标题栏 / 顶栏 /
+   侧栏）是全屏固定的框架，给它加 backdrop-filter 有两笔账：
+     ① 背后是页面最底层，模糊只会把极光糊淡，等于白花一次离屏合成的钱；
+     ② 侧栏背后永远是内容区边缘，透不出任何有用的东西，只会显脏。
+   所以这里只留半透明叠色——环境光从底下一路透到侧栏里，才会自然。 */
+html[data-theme='neon-ocean'] .app-titlebar {
+  background: rgba(11, 22, 36, 0.42);
+  border-bottom-color: rgba(120, 166, 223, 0.285);
+  box-shadow: inset 0 -8px 16px -14px rgba(120, 166, 223, 0.57);
+}
+
+/* 顶栏透明：它横跨侧栏与内容区，一旦有底色就会在侧栏顶部压出一条横带，
+   与 8px 下方的内容区产生色差。透明后三者共享同一片背景光。 */
+html[data-theme='neon-ocean'] .app-topbar {
+  background: transparent;
+  border-bottom-color: rgba(120, 166, 223, 0.171);
+}
+
+html[data-theme='neon-ocean'] .app-sidebar {
+  /* 侧栏完全透明，背景光一体化：
+     侧栏自己铺任何半透明色都会在「侧栏 / 内容区」之间形成一道可见的亮度台阶
+     （左暗右亮，像两块拼接）。这里让侧栏彻底透明、只留一条分隔线，环境光
+     就从最底层连续地铺满整屏，左侧菜单和右侧内容共享同一片荧光，不再各持一团。 */
+  background: transparent;
+  border-right-color: rgba(120, 166, 223, 0.209);
+  box-shadow: inset -1px 0 0 rgba(120, 166, 223, 0.095);
+}
+
+/* ---------- 卡片：半透磨砂玻璃 ---------- */
+html[data-theme='neon-ocean'] .card {
+  background:
+    linear-gradient(160deg, rgba(120, 166, 223, 0.095) 0%, rgba(120, 166, 223, 0.021) 44%, transparent 72%),
+    rgba(17, 29, 45, 0.5);
+  border: 1px solid rgba(120, 166, 223, 0.19);
+  backdrop-filter: blur(10px) saturate(140%);
+  -webkit-backdrop-filter: blur(10px) saturate(140%);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.18),
-    0 2px 8px -2px rgba(0, 0, 0, 0.7);
+    inset 0 1px 0 rgba(255, 255, 255, 0.07),
+    inset 0 -1px 0 rgba(120, 166, 223, 0.057),
+    0 12px 28px -20px rgba(0, 0, 0, 0.85);
 }
 
-/* 表头：一层极薄的雾面玻璃，数据行保持纯透明以保证长表滚动性能。
-   选择器必须带 `.app-main`（b=2）才压得过页面里写死的 `dark:bg-zinc-900/40`。 */
-html[data-theme='liquid-glass'] .app-main thead {
-  background: rgba(255, 255, 255, 0.022);
-  border-color: rgba(255, 255, 255, 0.06);
-}
-
-html[data-theme='liquid-glass'] .app-main .row-hover:hover {
-  background: rgb(var(--glass-accent) / 0.045);
-}
-
-/* 左下角应用格子：内凹的玻璃槽，选中项是一块被推亮的薄玻璃 */
-html[data-theme='liquid-glass'] .app-tabbar {
-  background: rgba(255, 255, 255, 0.024);
+html[data-theme='neon-ocean'] .card-hover:hover {
+  border-color: rgba(120, 166, 223, 0.475);
+  background:
+    linear-gradient(160deg, rgba(120, 166, 223, 0.162) 0%, rgba(120, 166, 223, 0.038) 44%, transparent 72%),
+    rgba(19, 33, 51, 0.55);
   box-shadow:
-    inset 0 1px 2px rgba(0, 0, 0, 0.6),
-    inset 0 -1px 0 rgba(255, 255, 255, 0.04);
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    0 0 0 1px rgba(120, 166, 223, 0.285),
+    0 16px 36px -22px rgba(120, 166, 223, 0.38),
+    0 12px 28px -20px rgba(0, 0, 0, 0.85);
 }
 
-html[data-theme='liquid-glass'] .app-tabbar [data-tab-active] {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.11), rgba(255, 255, 255, 0.04));
-  color: #f2ffff;
+/* 弹窗：遮罩压成深蓝底（遮罩本身是「背景暗化」不是面板背景，保留） */
+html[data-theme='neon-ocean'] .modal-scrim {
+  background: rgba(9, 17, 28, 0.62);
+  backdrop-filter: blur(10px) saturate(140%);
+  -webkit-backdrop-filter: blur(10px) saturate(140%);
+}
+
+/* 弹出层（弹窗面板 / 主题气泡 / 其它 portal 浮层）统一表面：
+   不铺实心背景色——磨砂本身就是那层「面」，再加一层实色会把背后的环境光
+   完全挡住，透光感全失、只剩一块扁平色块。只留：
+     · 极淡的绿色高光渐变（定方向感）
+     · 一点点纯色（5%~8%，保证密集文字的区域仍有足够对比）
+   所有弹出层共用同一条规则，避免各处「看着差不多但色值不同」。 */
+html[data-theme='neon-ocean'] .modal-panel,
+html[data-theme='neon-ocean'] .theme-pop {
+  background:
+    linear-gradient(155deg, rgba(120, 166, 223, 0.095) 0%, rgba(120, 166, 223, 0.019) 46%, transparent 74%),
+    rgba(14, 24, 39, 0.28);
+  border: 1px solid rgba(120, 166, 223, 0.285);
+  backdrop-filter: blur(22px) saturate(170%);
+  -webkit-backdrop-filter: blur(22px) saturate(170%);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.2),
-    0 2px 10px -3px rgb(var(--glass-accent) / 0.28);
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 0 42px -18px rgba(120, 166, 223, 0.285),
+    0 24px 60px -28px rgba(0, 0, 0, 0.9);
 }
 
-/* 侧栏选中项：青光渗进玻璃边 */
-html[data-theme='liquid-glass'] .app-sidebar [data-nav-active] {
-  background: linear-gradient(
-    90deg,
-    rgb(var(--glass-accent) / 0.13),
-    rgb(var(--glass-accent) / 0.04) 62%,
-    transparent
-  );
-  color: #f2ffff;
+/* 弹窗里的卡片不再叠第二层玻璃（否则层层叠加糊成一片） */
+html[data-theme='neon-ocean'] .modal-panel .card {
+  background: rgba(255, 255, 255, 0.028);
+  border-color: rgba(120, 166, 223, 0.152);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow: none;
 }
 
-html[data-theme='liquid-glass'] .nav-indicator {
-  background: linear-gradient(180deg, rgb(var(--glass-accent) / 1), rgb(var(--glass-accent-2) / 0.85));
-  box-shadow: 0 0 10px rgb(var(--glass-accent) / 0.7);
+/* ---------- 按钮：主按钮是整屏最亮的荧光块 ---------- */
+html[data-theme='neon-ocean'] .btn-primary {
+  background: linear-gradient(135deg, #92b9eb 0%, #78a6df 52%, #4c87d1 100%);
+  color: #0a182c;
+  border-color: rgba(255, 255, 255, 0.22);
+  font-weight: 600;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.42),
+    0 8px 26px -8px rgba(120, 166, 223, 0.684);
 }
 
-html[data-theme='liquid-glass'] .chip {
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+html[data-theme='neon-ocean'] .btn-primary:hover {
+  background: linear-gradient(135deg, #a8c6ee 0%, #8bb4e8 52%, #6799d8 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.5),
+    0 10px 32px -6px rgba(120, 166, 223, 0.855);
 }
 
-/* 滚动条：冷凝水滴 */
-html[data-theme='liquid-glass'] ::-webkit-scrollbar-thumb {
-  background: rgba(150, 205, 214, 0.32);
+html[data-theme='neon-ocean'] .btn-primary:active {
+  background: linear-gradient(135deg, #7da8dd 0%, #6896ce 52%, #3577cc 100%);
 }
 
-html[data-theme='liquid-glass'] ::-webkit-scrollbar-thumb:hover {
-  background: rgba(150, 205, 214, 0.58);
+html[data-theme='neon-ocean'] .btn-outline {
+  background: rgba(120, 166, 223, 0.085);
+  border-color: rgba(120, 166, 223, 0.38);
+  color: #c9daee;
 }
 
-html[data-theme='liquid-glass'] ::selection {
-  background: rgb(var(--glass-accent) / 0.26);
-  color: #f2ffff;
+html[data-theme='neon-ocean'] .btn-outline:hover {
+  background: rgba(120, 166, 223, 0.171);
+  border-color: rgba(120, 166, 223, 0.646);
+  color: #d8e5ff;
 }
 
-html[data-theme='liquid-glass'] button:focus-visible,
-html[data-theme='liquid-glass'] a:focus-visible {
-  outline-color: rgb(var(--glass-accent) / 0.62);
+html[data-theme='neon-ocean'] .btn-ghost {
+  color: rgba(214, 225, 242, 0.7);
 }
 
-@media (prefers-reduced-motion: reduce) {
-  html[data-theme='liquid-glass'] body::before {
-    animation: none;
-  }
+html[data-theme='neon-ocean'] .btn-ghost:hover {
+  background: rgba(120, 166, 223, 0.133);
+  color: #d8e5ff;
 }
+
+html[data-theme='neon-ocean'] .btn-danger {
+  background: #f2543e;
+  color: #1a0603;
+}
+
+/* ---------- 输入类控件：比面板更暗的「凹槽」，边框带浅蓝 ---------- */
+html[data-theme='neon-ocean'] .input {
+  background: rgba(9, 20, 32, 0.72);
+  border-color: rgba(120, 166, 223, 0.266);
+  color: #eaf2ff;
+}
+
+html[data-theme='neon-ocean'] .input:hover {
+  border-color: rgba(120, 166, 223, 0.399);
+}
+
+html[data-theme='neon-ocean'] .input:focus {
+  border-color: #78a6df;
+  box-shadow: 0 0 0 3px rgba(120, 166, 223, 0.209);
+}
+
+html[data-theme='neon-ocean'] .input::placeholder {
+  color: rgba(214, 225, 242, 0.34);
+}
+
+html[data-theme='neon-ocean'] .label {
+  color: rgba(214, 225, 242, 0.62);
+}
+
+/* ---------- 选中态：荧光铺满当前项 ---------- */
+html[data-theme='neon-ocean'] .app-sidebar [data-nav-active] {
+  background: linear-gradient(90deg, rgba(120, 166, 223, 0.21), rgba(120, 166, 223, 0.048) 78%);
+  color: #eaf2ff;
+  font-weight: 600;
+}
+
+html[data-theme='neon-ocean'] .nav-indicator {
+  background: #78a6df;
+  box-shadow:
+    0 0 14px rgba(120, 166, 223, 0.95),
+    0 0 26px rgba(120, 166, 223, 0.57);
+}
+
+/* 分段控件（页面内 Tab：今日 / 近 7 天 等）的选中胶囊。
+   这一块是整屏除主按钮外面积最大的实心荧光，满亮度的薄荷绿在深底上会「跳」出
+   界面，压到约 0.85 倍后与四周玻璃面同属一个亮度层级；深色文字 #0a182c 在
+   新值上对比度仍 >7:1，可读性不受影响。 */
+html[data-theme='neon-ocean'] [aria-pressed='true'] {
+  background: linear-gradient(180deg, #7a9fce, #5185c5);
+  color: #0a182c;
+  font-weight: 600;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.28),
+    0 2px 12px -3px rgba(120, 166, 223, 0.45);
+}
+
+html[data-theme='neon-ocean'] .app-tabbar {
+  background: rgba(9, 20, 32, 0.6);
+  border: 1px solid rgba(120, 166, 223, 0.209);
+}
+
+/* 左下角应用 Tab 的选中项：同样只保留「被托起来」的暗示，不做满亮实心 */
+html[data-theme='neon-ocean'] .app-tabbar [data-tab-active] {
+  background: rgba(120, 166, 223, 0.17);
+  color: #eaf2ff;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+/* ---------- 表格：表头是一条透绿的窄带，行悬停泛绿 ---------- */
+html[data-theme='neon-ocean'] .app-main thead {
+  background: linear-gradient(180deg, rgba(120, 166, 223, 0.133), rgba(120, 166, 223, 0.048));
+  border-color: rgba(120, 166, 223, 0.285);
+}
+
+html[data-theme='neon-ocean'] .app-main thead th {
+  color: #c4d9f2;
+}
+
+html[data-theme='neon-ocean'] .app-main .row-hover:hover {
+  background: rgba(120, 166, 223, 0.095);
+}
+
+/* 徽标不覆盖：`components/ui.tsx::toneMap` 里的成功 / 警告 / 危险语义色
+   （emerald / amber / rose）特异度只有 (0,2,0)，被主题里的 .chip 一刀切会全部退成灰，
+   状态就分不出来了。让语义色原样保留，只在深色底上由全局可读性规则兜住对比度。 */
+
+/* ---------- 滚动条 / 选区 / 焦点环 ---------- */
+html[data-theme='neon-ocean'] ::-webkit-scrollbar-thumb {
+  background: rgba(120, 166, 223, 0.399);
+}
+
+html[data-theme='neon-ocean'] ::-webkit-scrollbar-thumb:hover {
+  background: rgba(120, 166, 223, 0.684);
+}
+
+html[data-theme='neon-ocean'] ::selection {
+  background: rgba(120, 166, 223, 0.323);
+  color: #eaf2ff;
+}
+
+html[data-theme='neon-ocean'] button:focus-visible,
+html[data-theme='neon-ocean'] a:focus-visible {
+  outline-color: #78a6df;
+}
+
+/* 气泡内选中项：表面已统一到上面的弹出层规则，这里只管选中态配色 */
+html[data-theme='neon-ocean'] .theme-pop button[aria-current='true'] {
+  background: rgba(120, 166, 223, 0.152);
+  color: #eaf2ff;
+}
+

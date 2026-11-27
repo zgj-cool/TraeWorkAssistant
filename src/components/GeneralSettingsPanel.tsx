@@ -4,7 +4,6 @@ import { Save, RotateCcw, Bell, Send, GripVertical } from 'lucide-react';
 import { useAppStore } from '../store';
 import { withMinDelay } from '../lib/delay';
 import { api } from '../lib/tauri';
-import { THEMES } from '../lib/themes';
 import { APP_TABS } from './Sidebar';
 import { ICON_CHOICES, resolveAppIcon } from '../lib/appIcons';
 import { APP_LOGOS } from '../lib/appLogos';
@@ -22,9 +21,10 @@ const NOTIFY_CHANNEL_LABELS: Record<string, string> = {
 };
 
 /**
- * 通用设置面板：外观 / 语言 / 通用与通知 / 代理相关配置。
+ * 通用设置面板：应用显示 / 通用与通知 / 代理相关配置。
  * 供「系统设置」弹框（左下角系统图标）使用；环境配置页不包含这些区块。
- * 表单为本地状态，点击「保存」才持久化。
+ * 主题不在本面板——改由侧栏调色盘图标的气泡面板切换（即时生效，无需保存）。
+ * 表单为本地状态，点顶部「保存设置」才持久化。
  */
 export default function GeneralSettingsPanel() {
   const settings = useAppStore((s) => s.settings);
@@ -141,7 +141,7 @@ export default function GeneralSettingsPanel() {
   };
 
   // 拖拽落下重排：按「侧边栏显示」当前展示顺序（getOrderedApps）把 from 移到 to 的位置，
-  // 全量写回 app_order（后端 retain 归一合法 key + 去重）；点底部「保存设置」后生效
+  // 全量写回 app_order（后端 retain 归一合法 key + 去重）；点顶部「保存设置」后生效
   const reorderApps = (from: AppKey, to: AppKey) => {
     if (from === to) return;
     setForm((prev) => {
@@ -252,535 +252,525 @@ export default function GeneralSettingsPanel() {
   }
 
   return (
-    <div className="flex flex-col gap-4 text-sm">
-      {/* 外观 */}
-      <section className="card p-5">
-        <h3 className="mb-3 text-[14px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">外观</h3>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <div>
-            <label className="label">主题</label>
-            <select value={form.theme} onChange={(e) => update('theme', e.target.value)} className="input">
-              <option value="system">跟随系统</option>
-              {THEMES.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="label">语言</label>
-            <select value={form.language} onChange={(e) => update('language', e.target.value)} className="input">
-              <option value="zh-CN">简体中文</option>
-              <option value="en-US">English</option>
-            </select>
-          </div>
-        </div>
-      </section>
-
-      {/* 应用显示（侧边栏应用 Tab：固定应用单选 + 显示勾选 + 拖拽排序 + 行首图标点击换图标） */}
-      <section className="card p-5">
-        <h3 className="mb-1.5 text-[14px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">应用显示</h3>
-        <p className="mb-4 text-[12.5px] leading-relaxed text-slate-500 dark:text-zinc-400">
-          控制左下角侧边栏显示哪些应用。「固定应用」始终显示且不可隐藏（默认 Trae）；其余应用可自由勾选。
-          「侧边栏显示」行可上下拖动调整展示顺序（保存后侧边栏应用 Tab 按新顺序排列）；
-          隐藏仅收起入口，<b>不删除账号数据、不影响签到 / 保活等定时任务</b>，重新勾选即可恢复；
-          若当前正在浏览的应用被隐藏，会自动跳回固定应用。按住行首抓手上下拖动调整顺序（触屏/触笔同样支持），
-          或聚焦抓手后按 ↑/↓ 键与相邻行换位；图标可点击更换应用图标。
-        </p>
-        <div className="grid gap-x-8 gap-y-2 sm:grid-cols-2">
-          <div className="space-y-2">
-            <label className="label">固定应用（始终显示）</label>
-            {/* buddy-ai（国际版）默认隐藏、不参与固定应用（Sidebar 同口径；后端 state.rs 脏值回落 trae） */}
-            {APP_TABS.filter((t) => t.key !== 'buddy-ai').map((tab) => (
-              <label key={tab.key} className="flex items-center gap-2">
-                <input
-                  type="radio"
-                  name="pinned-app"
-                  checked={form.pinned_app === tab.key}
-                  onChange={() => setPinned(tab.key)}
-                />
-                {tab.label}
-                {tab.title ? <span className="text-xs text-slate-400">（{tab.title}）</span> : null}
-              </label>
-            ))}
-          </div>
-          <div className="space-y-1" ref={listRef}>
-            <label className="label">侧边栏显示</label>
-            {/* 行序即侧边栏应用 Tab 展示顺序：按住行首抓手上下拖动实时换位（getOrderedApps 渲染，未提及项默认顺序补尾） */}
-            {getOrderedApps(form).map((appKey) => {
-              const tab = APP_TABS.find((t) => t.key === appKey)!;
-              const isBuddyAi = tab.key === 'buddy-ai';
-              const pinned = form.pinned_app === tab.key;
-              // buddy-ai 可见性走独立 opt-in 开关（默认 false = 不展示），不进 hidden_apps
-              const visible = isBuddyAi ? form.buddy_ai_visible === true : pinned || !form.hidden_apps.includes(tab.key);
-              const customizedName = form.app_icons[tab.key];
-              const CurrentIcon = resolveAppIcon(customizedName);
-              const dragging = dragKey === tab.key;
-              return (
-                <div
-                  key={tab.key}
-                  data-app-key={tab.key}
-                  className={cn(
-                    'flex items-center gap-1.5 rounded-md px-0.5 transition-opacity',
-                    // 互斥：拖拽中优先显示拖拽反馈（cn 为纯 clsx，无 tailwind-merge，
-                    // 同组 opacity 类共存时生效值取决于样式表顺序，不能依赖覆盖）
-                    dragging ? 'opacity-40' : pinned && 'opacity-60',
-                  )}
-                >
-                  {/* 拖拽抓手（button）：按住上下拖动实时换位，或聚焦后按 ↑/↓ 与相邻行换位
-                      （C1 键盘替代 + C2 Pointer Events；select-none 承担原 preventDefault 防文字选择，
-                       保留按钮聚焦能力供键盘操作） */}
-                  <button
-                    type="button"
-                    title={`调整「${tab.label}」顺序：按住拖动，或聚焦后按 ↑/↓ 键`}
-                    aria-label={`调整「${tab.label}」顺序：按住拖动，或按上下方向键`}
-                    onPointerDown={beginDrag(tab.key)}
-                    onKeyDown={moveByKeyboard(tab.key)}
-                    className="flex h-7 w-7 shrink-0 cursor-grab touch-none select-none items-center justify-center rounded-md outline-none focus-visible:ring-2 focus-visible:ring-sky-500 active:cursor-grabbing"
-                  >
-                    <GripVertical
-                      size={14}
-                      className="text-slate-300 dark:text-zinc-600"
-                      aria-hidden
-                    />
-                  </button>
-                  {/* 行首图标：点击弹出候选表更换该应用在侧边栏的显示图标（仅 UI 偏好） */}
-                  <button
-                    type="button"
-                    title={`更换「${tab.label}」图标${customizedName ? `（当前：${customizedName}）` : '（当前：默认）'}`}
-                    onClick={() => setIconPickerFor(tab.key)}
-                    className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-slate-200 text-slate-600 transition hover:border-zinc-400 hover:text-zinc-800 active:scale-95 dark:border-zinc-700 dark:text-zinc-300 dark:hover:border-zinc-500 dark:hover:text-zinc-100"
-                  >
-                    {CurrentIcon ? (
-                      <CurrentIcon size={15} />
-                    ) : (
-                      <img
-                        src={APP_LOGOS[tab.key]}
-                        alt={`${tab.label} logo`}
-                        className="h-4 w-4 rounded-[3px] object-contain"
-                        draggable={false}
-                      />
-                    )}
-                  </button>
-                  <label className="flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      checked={visible}
-                      disabled={pinned}
-                      onChange={() =>
-                        isBuddyAi ? update('buddy_ai_visible', !(form.buddy_ai_visible === true)) : toggleAppVisible(tab.key)
-                      }
-                    />
-                    {tab.label}
-                    {pinned ? <span className="text-xs text-slate-400">（固定应用，不可隐藏）</span> : null}
-                    {isBuddyAi ? <span className="text-xs text-slate-400">（国际版，默认不展示）</span> : null}
-                  </label>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      </section>
-
-      {/* 图标选择弹框：点「侧边栏显示」行首图标弹出，在候选表内选择；选后需点底部「保存设置」生效 */}
-      {iconPickerFor
-        ? (() => {
-            const tab = APP_TABS.find((t) => t.key === iconPickerFor)!;
-            const customizedName = form.app_icons[tab.key];
-            const selectedName = customizedName;
-            return createPortal(
-              <div
-                className="fixed inset-0 z-[60] flex items-center justify-center p-4"
-                onClick={() => setIconPickerFor(null)}
-              >
-                <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
-                <div
-                  className="card animate-fade-in relative z-10 w-full max-w-sm p-4 shadow-xl"
-                  role="dialog"
-                  aria-modal="true"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <h3 className="mb-1 text-sm font-semibold text-slate-800 dark:text-zinc-100">
-                    更换「{tab.label}」图标
-                  </h3>
-                  <p className="mb-4 text-[12.5px] leading-relaxed text-slate-500 dark:text-zinc-400">
-                    选择侧边栏显示图标，点底部「保存设置」生效；未设置时显示该应用官方 logo。
-                  </p>
-                  <div className="grid grid-cols-8 gap-1">
-                    {ICON_CHOICES.map((c) => {
-                      const Choice = c.icon;
-                      const selected = selectedName === c.name;
-                      return (
-                        <button
-                          key={c.name}
-                          type="button"
-                          title={c.name}
-                          onClick={() => {
-                            setAppIcon(tab.key, c.name);
-                            setIconPickerFor(null);
-                          }}
-                          className={`flex h-8 items-center justify-center rounded-md transition ${
-                            selected
-                              ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900'
-                              : 'text-slate-600 hover:bg-slate-200 dark:text-zinc-400 dark:hover:bg-zinc-800'
-                          }`}
-                        >
-                          <Choice size={16} />
-                        </button>
-                      );
-                    })}
-                  </div>
-                  <div className="mt-3 flex items-center justify-between">
-                    {customizedName ? (
-                      <button
-                        className="btn-outline !px-2.5 !py-1 text-xs"
-                        onClick={() => {
-                          setAppIcon(tab.key, null);
-                          setIconPickerFor(null);
-                        }}
-                      >
-                        <RotateCcw size={12} /> 恢复默认
-                      </button>
-                    ) : (
-                      <span className="text-xs text-slate-400">当前使用默认图标</span>
-                    )}
-                    <button className="btn-outline !px-2.5 !py-1 text-xs" onClick={() => setIconPickerFor(null)}>
-                      取消
-                    </button>
-                  </div>
-                </div>
-              </div>,
-              document.body,
-            );
-          })()
-        : null}
-
-      {/* 通用与通知（两列布局：左选项/右开关组） */}
-      <section className="card p-5">
-        <h3 className="mb-3 text-[14px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">通用与通知</h3>
-        <div className="grid gap-x-8 gap-y-3 text-sm sm:grid-cols-2">
-          <div className="space-y-3">
-            <div>
-              <label className="label">通知方式</label>
-              <select value={form.notify} onChange={(e) => update('notify', e.target.value)} className="input">
-                <option value="toast">应用内 Toast</option>
-                <option value="system">系统通知</option>
-                <option value="both">Toast + 系统通知</option>
-                <option value="none">不通知</option>
-              </select>
-            </div>
-            <div>
-              <label className="label">日志保留天数</label>
-              <input
-                type="number"
-                value={form.log_retention_days}
-                onChange={(e) => update('log_retention_days', Math.min(365, Math.max(1, Number(e.target.value) || 30)))}
-                className="input w-28"
-                min={1}
-                max={365}
-              />
-              <p className="mt-1.5 text-[11.5px] leading-relaxed text-slate-500 dark:text-zinc-400">
-                应用启动时自动清理超过保留天数的运行日志（代理 / 签到 / 切换日志）。
-              </p>
-            </div>
-          </div>
-          <div className="space-y-3">
-            <label className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={form.launch_minimized}
-                onChange={(e) => update('launch_minimized', e.target.checked)}
-              />
-              启动时最小化到托盘
-            </label>
-            <label className="flex items-center gap-2">
-              <input type="checkbox" checked={form.tray} onChange={(e) => update('tray', e.target.checked)} />
-              启用系统托盘图标
-            </label>
-            <label className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={autostart}
-                onChange={() => void toggleAutostart()}
-                disabled={autostartBusy}
-              />
-              开机自启
-              <span className="text-xs text-slate-400">（开关即时生效，无需保存）</span>
-            </label>
-            <label className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={form.silent_checkin}
-                onChange={(e) => update('silent_checkin', e.target.checked)}
-              />
-              启动静默签到
-              <span className="text-xs text-slate-400">（启动 60 秒后自动为未签到账号签到）</span>
-            </label>
-            <label className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={form.auto_start_api}
-                onChange={(e) => update('auto_start_api', e.target.checked)}
-              />
-              启动时自动开启 API 网关
-              <span className="text-xs text-slate-400">（网关监听所有网卡，局域网设备可访问）</span>
-            </label>
-            <label className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={form.sessions_preview_enabled}
-                onChange={(e) => update('sessions_preview_enabled', e.target.checked)}
-              />
-              会话明细显示首条消息概述
-              <span className="text-xs text-slate-400">
-                （用量看板「会话说明」列；关闭仅隐藏展示，不删除缓存）
-              </span>
-            </label>
-            <p className="text-xs text-slate-400">托盘与最小化设置变更后需重启应用生效。</p>
-          </div>
-        </div>
-      </section>
-
-      {/* 通知渠道（F-19，全部应用共用） */}
-      <section className="card p-5">
-        <div className="mb-1 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Bell size={16} className="text-amber-500" />
-            <h3 className="text-[14px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">通知渠道</h3>
-          </div>
-          <button
-            className="btn-outline !px-2.5 !py-1 text-xs"
-            disabled={testing || dirty}
-            title={dirty ? '表单有未保存的修改，请先点底部「保存设置」再测试' : '按已保存的配置向全部渠道发送测试消息'}
-            onClick={() => void sendTest()}
-          >
-            <Send size={13} /> {testing ? '发送中…' : '发送测试'}
-          </button>
-        </div>
-        <p className="mb-4 text-[12.5px] leading-relaxed text-slate-500 dark:text-zinc-400">
-          签到完成 / 调度任务失败 / 定时任务完成（默认关，仅签到/成长类奖励任务，快照/续期/同步类高频任务不推；注意 Server酱 免费档每日仅 5 条）时推送到手机（Bark / Server酱 / PushPlus）或自建
-          Webhook，对全部应用（Trae、WorkBuddy、Qoder、豆包、Buddy 国际版）共用，未配置的渠道自动跳过；修改后点底部「保存设置」生效。
-        </p>
-        {/* 事件开关组：横排一条，与下方渠道输入视觉分离 */}
-        <div className="mb-3 flex flex-wrap items-center gap-x-5 gap-y-2 rounded-lg border border-slate-200/70 bg-slate-50/60 px-3.5 py-2.5 text-sm dark:border-zinc-700/50 dark:bg-zinc-800/30">
-          <label className="flex items-center gap-2">
-            <input
-              type="checkbox"
-              checked={form.notify_enabled}
-              onChange={(e) => update('notify_enabled', e.target.checked)}
-            />
-            启用通知推送（总开关）
-          </label>
-          <label className="flex items-center gap-2">
-            <input
-              type="checkbox"
-              checked={form.notify_on_checkin}
-              onChange={(e) => update('notify_on_checkin', e.target.checked)}
-            />
-            签到完成时通知
-          </label>
-          <label className="flex items-center gap-2">
-            <input
-              type="checkbox"
-              checked={form.notify_on_task_fail}
-              onChange={(e) => update('notify_on_task_fail', e.target.checked)}
-            />
-            调度任务失败时通知
-          </label>
-          <label
-            className="flex items-center gap-2"
-            title="签到/成长类奖励任务成功完成时推送（快照/续期/目录同步类高频任务不推，避免刷屏并保护渠道额度）；Server酱 免费档每日仅 5 条"
-          >
-            <input
-              type="checkbox"
-              checked={form.notify_on_task_success}
-              onChange={(e) => update('notify_on_task_success', e.target.checked)}
-            />
-            定时任务完成时通知
-          </label>
-        </div>
-        <div className="grid gap-x-4 gap-y-3 text-sm sm:grid-cols-2">
-          <div>
-            <label className="label">Bark 推送地址</label>
-            <input
-              type="text"
-              value={form.notify_bark_url ?? ''}
-              onChange={(e) => update('notify_bark_url', e.target.value.trim() || null)}
-              placeholder="https://api.day.app/你的Key"
-              className="input"
-            />
-          </div>
-          <div>
-            <label className="label">Server酱 SendKey</label>
-            <input
-              type="text"
-              value={form.notify_serverchan_sendkey ?? ''}
-              onChange={(e) => update('notify_serverchan_sendkey', e.target.value.trim() || null)}
-              placeholder="SCT...（sct.ftqq.com 获取）"
-              className="input"
-            />
-          </div>
-          {/* PushPlus 子面板：三控件（Token / 模板 / 群组编码）收拢为一组，issue #157 */}
-          <div className="rounded-lg border border-slate-200/70 bg-slate-50/60 p-3.5 dark:border-zinc-700/50 dark:bg-zinc-800/30 sm:col-span-2">
-            <div className="mb-2.5 flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
-              <span className="text-xs font-medium text-slate-600 dark:text-zinc-300">PushPlus 微信推送</span>
-              <a
-                href="https://www.pushplus.plus/"
-                target="_blank"
-                rel="noreferrer"
-                className="text-[11px] text-slate-400 transition-colors hover:text-zinc-500 dark:text-zinc-500 dark:hover:text-zinc-400"
-              >
-                pushplus.plus · 微信扫码登录获取 Token ↗
-              </a>
-            </div>
-            <div className="space-y-3">
-              <div>
-                <label className="label">Token</label>
-                <input
-                  type="text"
-                  value={form.notify_pushplus_token ?? ''}
-                  onChange={(e) => update('notify_pushplus_token', e.target.value.trim() || null)}
-                  placeholder="PushPlus Token（留空 = 关闭该渠道）"
-                  className="input"
-                />
-              </div>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div>
-                  <label className="label">推送模板</label>
-                  <select
-                    value={form.notify_pushplus_template ?? ''}
-                    onChange={(e) => update('notify_pushplus_template', e.target.value || null)}
-                    className="input"
-                  >
-                    <option value="">默认（txt，保留换行）</option>
-                    <option value="txt">txt · 纯文本</option>
-                    <option value="html">html · 网页</option>
-                    <option value="markdown">markdown</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="label">群组编码（可选）</label>
-                  <input
-                    type="text"
-                    value={form.notify_pushplus_topic ?? ''}
-                    onChange={(e) => update('notify_pushplus_topic', e.target.value.trim() || null)}
-                    placeholder="一对多群发；留空 = 仅发给自己"
-                    className="input"
-                  />
-                </div>
-              </div>
-            </div>
-          </div>
-          <div className="sm:col-span-2">
-            <label className="label">通用 Webhook 地址</label>
-            <input
-              type="text"
-              value={form.notify_webhook_url ?? ''}
-              onChange={(e) => update('notify_webhook_url', e.target.value.trim() || null)}
-              placeholder="https://...（POST JSON，兼容企业微信机器人等自建端）"
-              className="input"
-            />
-          </div>
-        </div>
-        {/* 最近推送状态（issue #222）：渠道失败此前只静默落 app.log，面板直接回显成败与原因。
-            仅展示当前仍配置的渠道（审查修复 #3：清空渠道后的陈旧条目不再误导）；「测试」
-            标记区分来源（审查修复 #7，src="test" 由 notify_test 写入） */}
-        {Object.keys(lastNotifyResult).length > 0 && (
-          <div className="mt-3 rounded-lg border border-slate-200/70 bg-slate-50/60 px-3.5 py-2.5 text-xs dark:border-zinc-700/50 dark:bg-zinc-800/30">
-            <div className="mb-1 font-medium text-slate-500 dark:text-zinc-400">最近推送</div>
-            <div className="space-y-1">
-              {Object.entries(lastNotifyResult)
-                .filter(([k]) => {
-                  const configured: Record<string, boolean> = {
-                    bark: Boolean(form.notify_bark_url?.trim()),
-                    wechat: Boolean(form.notify_webhook_url?.trim()),
-                    serverchan: Boolean(form.notify_serverchan_sendkey?.trim()),
-                    pushplus: Boolean(form.notify_pushplus_token?.trim()),
-                  };
-                  return configured[k];
-                })
-                .map(([k, v]) => (
-                  <div key={k} className="flex flex-wrap items-baseline gap-x-2">
-                    <span className={v.ok ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}>
-                      {NOTIFY_CHANNEL_LABELS[k] ?? k}
-                      {v.src === 'test' ? '（测试）' : ''} · {v.ok ? '成功' : '失败'}
-                    </span>
-                    <span className="text-slate-400 dark:text-zinc-500">{new Date(v.ts).toLocaleString()}</span>
-                    {!v.ok && v.err && <span className="text-slate-400 dark:text-zinc-500">{v.err}</span>}
-                  </div>
-                ))}
-            </div>
-          </div>
+    <div className="flex min-h-0 flex-1 flex-col gap-3 text-sm">
+      {/* 保存条（固定在滚动区之外）：提交动作永远可见，不用滚到底部。
+          这里刻意不用 sticky——sticky 仍躺在滚动容器里，滚动时它会盖在内容之上，
+          而它本身是半透明底，下方文字会隐约透出来、形成一条灰带。
+          改成「工具栏 + 独立滚动区」两段结构后，工具栏与内容彻底分层。
+          底色对齐「系统日志」页的 Tab 分段控件（bg-slate-50/80 与
+          dark:bg-zinc-800/40），两个 Tab 的顶部工具条视觉一致。 */}
+      <div className="flex shrink-0 items-center justify-end gap-2 rounded-xl border border-slate-200/80 bg-slate-50/80 px-3 py-2 dark:border-zinc-700/60 dark:bg-zinc-800/40">
+        {dirty ? (
+          <span className="mr-auto text-xs text-amber-500">有未保存的更改</span>
+        ) : (
+          <span className="mr-auto text-xs text-slate-400 dark:text-zinc-500">所有更改已保存</span>
         )}
-      </section>
-
-      {/* 代理相关 */}
-      <section className="card p-5">
-        <h3 className="mb-1.5 text-[14px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">代理</h3>
-        <p className="mb-4 text-[12.5px] leading-relaxed text-slate-500 dark:text-zinc-400">本地 MITM 代理的端口与抓包行为，修改后需重启代理生效。</p>
-        <div className="space-y-3.5 text-sm">
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div>
-              <label className="label">代理端口</label>
-              <input
-                type="number"
-                value={form.proxy_port}
-                onChange={(e) => update('proxy_port', Math.min(65535, Math.max(1, Number(e.target.value) || 8899)))}
-                className="input w-32"
-                min={1}
-                max={65535}
-              />
-            </div>
-            <label className="flex items-center gap-2 self-end pb-2.5">
-              <input
-                type="checkbox"
-                checked={form.auto_start_proxy}
-                onChange={(e) => update('auto_start_proxy', e.target.checked)}
-              />
-              启动时自动开启代理
-            </label>
-          </div>
-          <div>
-            <label className="label">代理监听域名列表</label>
-            <textarea
-              value={form.proxy_domains}
-              onChange={(e) => update('proxy_domains', e.target.value)}
-              className="input min-h-[60px] text-xs"
-              placeholder="trae.cn,trae.com.cn,mchost.guru,zijieapi.com,bytedance.com,volcengine.com,volces.com,treecode.com,doubao.com"
-            />
-            <p className="mt-1.5 text-[11.5px] leading-relaxed text-slate-500 dark:text-zinc-400">
-              逗号分隔的域名后缀列表，即 <b>解密白名单</b>（同 Charles SSL Proxying）：列表内域名走
-              MITM 解密并记录日志；未列出的域名透明直通、不记录。注意：做证书锁定（cert pinning）的客户端
-              （如豆包 ttnet 原生栈）对其 API 域解密会被拒，应只列入需要抓取凭证/流量的具体域名
-              （如 www.doubao.com），不要配宽后缀。留空则使用默认值。
-            </p>
-          </div>
-          <div>
-            <label className="label">代理抓取日志路径</label>
-            <input
-              type="text"
-              value={form.proxy_log_path ?? ''}
-              onChange={(e) => update('proxy_log_path', e.target.value.trim() || null)}
-              placeholder="留空则默认 %APPDATA%\AIWorkAssistant\logs"
-              className="input"
-            />
-            <p className="mt-1.5 text-[11.5px] leading-relaxed text-slate-500 dark:text-zinc-400">
-              代理拦截到的完整请求/响应将记录到此目录，按 100MB 滚动存储。
-            </p>
-          </div>
-        </div>
-      </section>
-
-      {/* 保存条 */}
-      <div className="flex items-center justify-end gap-2 pb-1">
-        {dirty && <span className="mr-auto text-xs text-amber-500">有未保存的更改</span>}
         <button onClick={reset} disabled={!dirty} className="btn-outline disabled:opacity-40">
           <RotateCcw size={15} /> 撤销
         </button>
         <button onClick={save} disabled={saving || !dirty} className="btn-outline disabled:opacity-40">
           <Save size={15} /> {saving ? '保存中…' : '保存设置'}
         </button>
+      </div>
+
+      {/* 可滚动内容区 */}
+      <div className="-mr-1 min-h-0 flex-1 overflow-y-auto pr-1">
+        <div className="flex flex-col gap-4">
+
+          {/* 应用显示（侧边栏应用 Tab：固定应用单选 + 显示勾选 + 拖拽排序 + 行首图标点击换图标） */}
+          <section className="card p-5">
+            <h3 className="mb-1.5 text-[14px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">应用显示</h3>
+            <p className="mb-4 text-[12.5px] leading-relaxed text-slate-500 dark:text-zinc-400">
+              控制左下角侧边栏显示哪些应用。「固定应用」始终显示且不可隐藏（默认 Trae）；其余应用可自由勾选。
+              「侧边栏显示」行可上下拖动调整展示顺序（保存后侧边栏应用 Tab 按新顺序排列）；
+              隐藏仅收起入口，<b>不删除账号数据、不影响签到 / 保活等定时任务</b>，重新勾选即可恢复；
+              若当前正在浏览的应用被隐藏，会自动跳回固定应用。按住行首抓手上下拖动调整顺序（触屏/触笔同样支持），
+              或聚焦抓手后按 ↑/↓ 键与相邻行换位；图标可点击更换应用图标。
+            </p>
+            <div className="grid gap-x-8 gap-y-2 sm:grid-cols-2">
+              <div className="space-y-2">
+                <label className="label">固定应用（始终显示）</label>
+                {/* buddy-ai（国际版）默认隐藏、不参与固定应用（Sidebar 同口径；后端 state.rs 脏值回落 trae） */}
+                {APP_TABS.filter((t) => t.key !== 'buddy-ai').map((tab) => (
+                  <label key={tab.key} className="flex items-center gap-2">
+                    <input
+                      type="radio"
+                      name="pinned-app"
+                      checked={form.pinned_app === tab.key}
+                      onChange={() => setPinned(tab.key)}
+                    />
+                    {tab.label}
+                    {tab.title ? <span className="text-xs text-slate-400">（{tab.title}）</span> : null}
+                  </label>
+                ))}
+              </div>
+              <div className="space-y-1" ref={listRef}>
+                <label className="label">侧边栏显示</label>
+                {/* 行序即侧边栏应用 Tab 展示顺序：按住行首抓手上下拖动实时换位（getOrderedApps 渲染，未提及项默认顺序补尾） */}
+                {getOrderedApps(form).map((appKey) => {
+                  const tab = APP_TABS.find((t) => t.key === appKey)!;
+                  const isBuddyAi = tab.key === 'buddy-ai';
+                  const pinned = form.pinned_app === tab.key;
+                  // buddy-ai 可见性走独立 opt-in 开关（默认 false = 不展示），不进 hidden_apps
+                  const visible = isBuddyAi ? form.buddy_ai_visible === true : pinned || !form.hidden_apps.includes(tab.key);
+                  const customizedName = form.app_icons[tab.key];
+                  const CurrentIcon = resolveAppIcon(customizedName);
+                  const dragging = dragKey === tab.key;
+                  return (
+                    <div
+                      key={tab.key}
+                      data-app-key={tab.key}
+                      className={cn(
+                        'flex items-center gap-1.5 rounded-md px-0.5 transition-opacity',
+                        // 互斥：拖拽中优先显示拖拽反馈（cn 为纯 clsx，无 tailwind-merge，
+                        // 同组 opacity 类共存时生效值取决于样式表顺序，不能依赖覆盖）
+                        dragging ? 'opacity-40' : pinned && 'opacity-60',
+                      )}
+                    >
+                      {/* 拖拽抓手（button）：按住上下拖动实时换位，或聚焦后按 ↑/↓ 与相邻行换位
+                          （C1 键盘替代 + C2 Pointer Events；select-none 承担原 preventDefault 防文字选择，
+                           保留按钮聚焦能力供键盘操作） */}
+                      <button
+                        type="button"
+                        title={`调整「${tab.label}」顺序：按住拖动，或聚焦后按 ↑/↓ 键`}
+                        aria-label={`调整「${tab.label}」顺序：按住拖动，或按上下方向键`}
+                        onPointerDown={beginDrag(tab.key)}
+                        onKeyDown={moveByKeyboard(tab.key)}
+                        className="flex h-7 w-7 shrink-0 cursor-grab touch-none select-none items-center justify-center rounded-md outline-none focus-visible:ring-2 focus-visible:ring-sky-500 active:cursor-grabbing"
+                      >
+                        <GripVertical
+                          size={14}
+                          className="text-slate-300 dark:text-zinc-600"
+                          aria-hidden
+                        />
+                      </button>
+                      {/* 行首图标：点击弹出候选表更换该应用在侧边栏的显示图标（仅 UI 偏好） */}
+                      <button
+                        type="button"
+                        title={`更换「${tab.label}」图标${customizedName ? `（当前：${customizedName}）` : '（当前：默认）'}`}
+                        onClick={() => setIconPickerFor(tab.key)}
+                        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-slate-200 text-slate-600 transition hover:border-zinc-400 hover:text-zinc-800 active:scale-95 dark:border-zinc-700 dark:text-zinc-300 dark:hover:border-zinc-500 dark:hover:text-zinc-100"
+                      >
+                        {CurrentIcon ? (
+                          <CurrentIcon size={15} />
+                        ) : (
+                          <img
+                            src={APP_LOGOS[tab.key]}
+                            alt={`${tab.label} logo`}
+                            className="h-4 w-4 rounded-[3px] object-contain"
+                            draggable={false}
+                          />
+                        )}
+                      </button>
+                      <label className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={visible}
+                          disabled={pinned}
+                          onChange={() =>
+                            isBuddyAi ? update('buddy_ai_visible', !(form.buddy_ai_visible === true)) : toggleAppVisible(tab.key)
+                          }
+                        />
+                        {tab.label}
+                        {pinned ? <span className="text-xs text-slate-400">（固定应用，不可隐藏）</span> : null}
+                        {isBuddyAi ? <span className="text-xs text-slate-400">（国际版，默认不展示）</span> : null}
+                      </label>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </section>
+    
+          {/* 图标选择弹框：点「侧边栏显示」行首图标弹出，在候选表内选择；选后需点顶部「保存设置」生效 */}
+          {iconPickerFor
+            ? (() => {
+                const tab = APP_TABS.find((t) => t.key === iconPickerFor)!;
+                const customizedName = form.app_icons[tab.key];
+                const selectedName = customizedName;
+                return createPortal(
+                  <div
+                    className="fixed inset-0 z-[60] flex items-center justify-center p-4"
+                    onClick={() => setIconPickerFor(null)}
+                  >
+                    <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
+                    <div
+                      className="card animate-fade-in relative z-10 w-full max-w-sm p-4 shadow-xl"
+                      role="dialog"
+                      aria-modal="true"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <h3 className="mb-1 text-sm font-semibold text-slate-800 dark:text-zinc-100">
+                        更换「{tab.label}」图标
+                      </h3>
+                      <p className="mb-4 text-[12.5px] leading-relaxed text-slate-500 dark:text-zinc-400">
+                        选择侧边栏显示图标，点顶部「保存设置」生效；未设置时显示该应用官方 logo。
+                      </p>
+                      <div className="grid grid-cols-8 gap-1">
+                        {ICON_CHOICES.map((c) => {
+                          const Choice = c.icon;
+                          const selected = selectedName === c.name;
+                          return (
+                            <button
+                              key={c.name}
+                              type="button"
+                              title={c.name}
+                              onClick={() => {
+                                setAppIcon(tab.key, c.name);
+                                setIconPickerFor(null);
+                              }}
+                              className={`flex h-8 items-center justify-center rounded-md transition ${
+                                selected
+                                  ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900'
+                                  : 'text-slate-600 hover:bg-slate-200 dark:text-zinc-400 dark:hover:bg-zinc-800'
+                              }`}
+                            >
+                              <Choice size={16} />
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <div className="mt-3 flex items-center justify-between">
+                        {customizedName ? (
+                          <button
+                            className="btn-outline !px-2.5 !py-1 text-xs"
+                            onClick={() => {
+                              setAppIcon(tab.key, null);
+                              setIconPickerFor(null);
+                            }}
+                          >
+                            <RotateCcw size={12} /> 恢复默认
+                          </button>
+                        ) : (
+                          <span className="text-xs text-slate-400">当前使用默认图标</span>
+                        )}
+                        <button className="btn-outline !px-2.5 !py-1 text-xs" onClick={() => setIconPickerFor(null)}>
+                          取消
+                        </button>
+                      </div>
+                    </div>
+                  </div>,
+                  document.body,
+                );
+              })()
+            : null}
+    
+          {/* 通用与通知（两列布局：左选项/右开关组） */}
+          <section className="card p-5">
+            <h3 className="mb-3 text-[14px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">通用与通知</h3>
+            <div className="grid gap-x-8 gap-y-3 text-sm sm:grid-cols-2">
+              <div className="space-y-3">
+                <div>
+                  <label className="label">通知方式</label>
+                  <select value={form.notify} onChange={(e) => update('notify', e.target.value)} className="input">
+                    <option value="toast">应用内 Toast</option>
+                    <option value="system">系统通知</option>
+                    <option value="both">Toast + 系统通知</option>
+                    <option value="none">不通知</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="label">日志保留天数</label>
+                  <input
+                    type="number"
+                    value={form.log_retention_days}
+                    onChange={(e) => update('log_retention_days', Math.min(365, Math.max(1, Number(e.target.value) || 30)))}
+                    className="input w-28"
+                    min={1}
+                    max={365}
+                  />
+                  <p className="mt-1.5 text-[11.5px] leading-relaxed text-slate-500 dark:text-zinc-400">
+                    应用启动时自动清理超过保留天数的运行日志（代理 / 签到 / 切换日志）。
+                  </p>
+                </div>
+              </div>
+              <div className="space-y-3">
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={form.launch_minimized}
+                    onChange={(e) => update('launch_minimized', e.target.checked)}
+                  />
+                  启动时最小化到托盘
+                </label>
+                <label className="flex items-center gap-2">
+                  <input type="checkbox" checked={form.tray} onChange={(e) => update('tray', e.target.checked)} />
+                  启用系统托盘图标
+                </label>
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={autostart}
+                    onChange={() => void toggleAutostart()}
+                    disabled={autostartBusy}
+                  />
+                  开机自启
+                  <span className="text-xs text-slate-400">（开关即时生效，无需保存）</span>
+                </label>
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={form.silent_checkin}
+                    onChange={(e) => update('silent_checkin', e.target.checked)}
+                  />
+                  启动静默签到
+                  <span className="text-xs text-slate-400">（启动 60 秒后自动为未签到账号签到）</span>
+                </label>
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={form.auto_start_api}
+                    onChange={(e) => update('auto_start_api', e.target.checked)}
+                  />
+                  启动时自动开启 API 网关
+                  <span className="text-xs text-slate-400">（网关监听所有网卡，局域网设备可访问）</span>
+                </label>
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={form.sessions_preview_enabled}
+                    onChange={(e) => update('sessions_preview_enabled', e.target.checked)}
+                  />
+                  会话明细显示首条消息概述
+                  <span className="text-xs text-slate-400">
+                    （用量看板「会话说明」列；关闭仅隐藏展示，不删除缓存）
+                  </span>
+                </label>
+                <p className="text-xs text-slate-400">托盘与最小化设置变更后需重启应用生效。</p>
+              </div>
+            </div>
+          </section>
+    
+          {/* 通知渠道（F-19，全部应用共用） */}
+          <section className="card p-5">
+            <div className="mb-1 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Bell size={16} className="text-amber-500" />
+                <h3 className="text-[14px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">通知渠道</h3>
+              </div>
+              <button
+                className="btn-outline !px-2.5 !py-1 text-xs"
+                disabled={testing || dirty}
+                title={dirty ? '表单有未保存的修改，请先点顶部「保存设置」再测试' : '按已保存的配置向全部渠道发送测试消息'}
+                onClick={() => void sendTest()}
+              >
+                <Send size={13} /> {testing ? '发送中…' : '发送测试'}
+              </button>
+            </div>
+            <p className="mb-4 text-[12.5px] leading-relaxed text-slate-500 dark:text-zinc-400">
+              签到完成 / 调度任务失败 / 定时任务完成（默认关，仅签到/成长类奖励任务，快照/续期/同步类高频任务不推；注意 Server酱 免费档每日仅 5 条）时推送到手机（Bark / Server酱 / PushPlus）或自建
+              Webhook，对全部应用（Trae、WorkBuddy、Qoder、豆包、Buddy 国际版）共用，未配置的渠道自动跳过；修改后点顶部「保存设置」生效。
+            </p>
+            {/* 事件开关组：横排一条，与下方渠道输入视觉分离 */}
+            <div className="mb-3 flex flex-wrap items-center gap-x-5 gap-y-2 rounded-lg border border-slate-200/70 bg-slate-50/60 px-3.5 py-2.5 text-sm dark:border-zinc-700/50 dark:bg-zinc-800/30">
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={form.notify_enabled}
+                  onChange={(e) => update('notify_enabled', e.target.checked)}
+                />
+                启用通知推送（总开关）
+              </label>
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={form.notify_on_checkin}
+                  onChange={(e) => update('notify_on_checkin', e.target.checked)}
+                />
+                签到完成时通知
+              </label>
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={form.notify_on_task_fail}
+                  onChange={(e) => update('notify_on_task_fail', e.target.checked)}
+                />
+                调度任务失败时通知
+              </label>
+              <label
+                className="flex items-center gap-2"
+                title="签到/成长类奖励任务成功完成时推送（快照/续期/目录同步类高频任务不推，避免刷屏并保护渠道额度）；Server酱 免费档每日仅 5 条"
+              >
+                <input
+                  type="checkbox"
+                  checked={form.notify_on_task_success}
+                  onChange={(e) => update('notify_on_task_success', e.target.checked)}
+                />
+                定时任务完成时通知
+              </label>
+            </div>
+            <div className="grid gap-x-4 gap-y-3 text-sm sm:grid-cols-2">
+              <div>
+                <label className="label">Bark 推送地址</label>
+                <input
+                  type="text"
+                  value={form.notify_bark_url ?? ''}
+                  onChange={(e) => update('notify_bark_url', e.target.value.trim() || null)}
+                  placeholder="https://api.day.app/你的Key"
+                  className="input"
+                />
+              </div>
+              <div>
+                <label className="label">Server酱 SendKey</label>
+                <input
+                  type="text"
+                  value={form.notify_serverchan_sendkey ?? ''}
+                  onChange={(e) => update('notify_serverchan_sendkey', e.target.value.trim() || null)}
+                  placeholder="SCT...（sct.ftqq.com 获取）"
+                  className="input"
+                />
+              </div>
+              {/* PushPlus 子面板：三控件（Token / 模板 / 群组编码）收拢为一组，issue #157 */}
+              <div className="rounded-lg border border-slate-200/70 bg-slate-50/60 p-3.5 dark:border-zinc-700/50 dark:bg-zinc-800/30 sm:col-span-2">
+                <div className="mb-2.5 flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+                  <span className="text-xs font-medium text-slate-600 dark:text-zinc-300">PushPlus 微信推送</span>
+                  <a
+                    href="https://www.pushplus.plus/"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-[11px] text-slate-400 transition-colors hover:text-zinc-500 dark:text-zinc-500 dark:hover:text-zinc-400"
+                  >
+                    pushplus.plus · 微信扫码登录获取 Token ↗
+                  </a>
+                </div>
+                <div className="space-y-3">
+                  <div>
+                    <label className="label">Token</label>
+                    <input
+                      type="text"
+                      value={form.notify_pushplus_token ?? ''}
+                      onChange={(e) => update('notify_pushplus_token', e.target.value.trim() || null)}
+                      placeholder="PushPlus Token（留空 = 关闭该渠道）"
+                      className="input"
+                    />
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div>
+                      <label className="label">推送模板</label>
+                      <select
+                        value={form.notify_pushplus_template ?? ''}
+                        onChange={(e) => update('notify_pushplus_template', e.target.value || null)}
+                        className="input"
+                      >
+                        <option value="">默认（txt，保留换行）</option>
+                        <option value="txt">txt · 纯文本</option>
+                        <option value="html">html · 网页</option>
+                        <option value="markdown">markdown</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="label">群组编码（可选）</label>
+                      <input
+                        type="text"
+                        value={form.notify_pushplus_topic ?? ''}
+                        onChange={(e) => update('notify_pushplus_topic', e.target.value.trim() || null)}
+                        placeholder="一对多群发；留空 = 仅发给自己"
+                        className="input"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div className="sm:col-span-2">
+                <label className="label">通用 Webhook 地址</label>
+                <input
+                  type="text"
+                  value={form.notify_webhook_url ?? ''}
+                  onChange={(e) => update('notify_webhook_url', e.target.value.trim() || null)}
+                  placeholder="https://...（POST JSON，兼容企业微信机器人等自建端）"
+                  className="input"
+                />
+              </div>
+            </div>
+            {/* 最近推送状态（issue #222）：渠道失败此前只静默落 app.log，面板直接回显成败与原因。
+                仅展示当前仍配置的渠道（审查修复 #3：清空渠道后的陈旧条目不再误导）；「测试」
+                标记区分来源（审查修复 #7，src="test" 由 notify_test 写入） */}
+            {Object.keys(lastNotifyResult).length > 0 && (
+              <div className="mt-3 rounded-lg border border-slate-200/70 bg-slate-50/60 px-3.5 py-2.5 text-xs dark:border-zinc-700/50 dark:bg-zinc-800/30">
+                <div className="mb-1 font-medium text-slate-500 dark:text-zinc-400">最近推送</div>
+                <div className="space-y-1">
+                  {Object.entries(lastNotifyResult)
+                    .filter(([k]) => {
+                      const configured: Record<string, boolean> = {
+                        bark: Boolean(form.notify_bark_url?.trim()),
+                        wechat: Boolean(form.notify_webhook_url?.trim()),
+                        serverchan: Boolean(form.notify_serverchan_sendkey?.trim()),
+                        pushplus: Boolean(form.notify_pushplus_token?.trim()),
+                      };
+                      return configured[k];
+                    })
+                    .map(([k, v]) => (
+                      <div key={k} className="flex flex-wrap items-baseline gap-x-2">
+                        <span className={v.ok ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}>
+                          {NOTIFY_CHANNEL_LABELS[k] ?? k}
+                          {v.src === 'test' ? '（测试）' : ''} · {v.ok ? '成功' : '失败'}
+                        </span>
+                        <span className="text-slate-400 dark:text-zinc-500">{new Date(v.ts).toLocaleString()}</span>
+                        {!v.ok && v.err && <span className="text-slate-400 dark:text-zinc-500">{v.err}</span>}
+                      </div>
+                    ))}
+                </div>
+              </div>
+            )}
+          </section>
+    
+          {/* 代理相关 */}
+          <section className="card p-5">
+            <h3 className="mb-1.5 text-[14px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-zinc-50">代理</h3>
+            <p className="mb-4 text-[12.5px] leading-relaxed text-slate-500 dark:text-zinc-400">本地 MITM 代理的端口与抓包行为，修改后需重启代理生效。</p>
+            <div className="space-y-3.5 text-sm">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div>
+                  <label className="label">代理端口</label>
+                  <input
+                    type="number"
+                    value={form.proxy_port}
+                    onChange={(e) => update('proxy_port', Math.min(65535, Math.max(1, Number(e.target.value) || 8899)))}
+                    className="input w-32"
+                    min={1}
+                    max={65535}
+                  />
+                </div>
+                <label className="flex items-center gap-2 self-end pb-2.5">
+                  <input
+                    type="checkbox"
+                    checked={form.auto_start_proxy}
+                    onChange={(e) => update('auto_start_proxy', e.target.checked)}
+                  />
+                  启动时自动开启代理
+                </label>
+              </div>
+              <div>
+                <label className="label">代理监听域名列表</label>
+                <textarea
+                  value={form.proxy_domains}
+                  onChange={(e) => update('proxy_domains', e.target.value)}
+                  className="input min-h-[60px] text-xs"
+                  placeholder="trae.cn,trae.com.cn,mchost.guru,zijieapi.com,bytedance.com,volcengine.com,volces.com,treecode.com,doubao.com"
+                />
+                <p className="mt-1.5 text-[11.5px] leading-relaxed text-slate-500 dark:text-zinc-400">
+                  逗号分隔的域名后缀列表，即 <b>解密白名单</b>（同 Charles SSL Proxying）：列表内域名走
+                  MITM 解密并记录日志；未列出的域名透明直通、不记录。注意：做证书锁定（cert pinning）的客户端
+                  （如豆包 ttnet 原生栈）对其 API 域解密会被拒，应只列入需要抓取凭证/流量的具体域名
+                  （如 www.doubao.com），不要配宽后缀。留空则使用默认值。
+                </p>
+              </div>
+              <div>
+                <label className="label">代理抓取日志路径</label>
+                <input
+                  type="text"
+                  value={form.proxy_log_path ?? ''}
+                  onChange={(e) => update('proxy_log_path', e.target.value.trim() || null)}
+                  placeholder="留空则默认 %APPDATA%\AIWorkAssistant\logs"
+                  className="input"
+                />
+                <p className="mt-1.5 text-[11.5px] leading-relaxed text-slate-500 dark:text-zinc-400">
+                  代理拦截到的完整请求/响应将记录到此目录，按 100MB 滚动存储。
+                </p>
+              </div>
+            </div>
+          </section>
+        </div>
       </div>
     </div>
   );

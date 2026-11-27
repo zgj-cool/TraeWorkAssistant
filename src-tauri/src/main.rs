@@ -458,12 +458,12 @@ fn show_main_window(app: &tauri::AppHandle) {
 
 /// 启动页底色判定：与前端 `lib/themes.ts::resolveTheme` 口径保持一致
 /// （具体主题按自身明暗；`light`/`dark` 兼容旧值；`system`/空 → 跟随系统；
-///  其余未知非空值在前端回退默认主题「炭黑」= 深色）。
+///  其余未知非空值在前端回退默认主题「深色」）。
 fn splash_prefers_dark(theme: &str) -> bool {
     match theme.trim() {
         "graphite" | "light" => false,
-        "charcoal" | "dark" | "violet-night" | "ink-green" | "amber-night" | "tech-blue"
-        | "liquid-glass" => true,
+        "charcoal" | "dark" | "violet-night" | "ink-green" | "tech-blue" | "neon-forest"
+        | "neon-ocean" => true,
         "" | "system" => system_prefers_dark(),
         _ => true,
     }

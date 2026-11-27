@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   LayoutDashboard,
   Users,
@@ -20,13 +20,13 @@ import {
 } from 'lucide-react';
 import { useAppStore } from '../store';
 import { cn } from '../lib/cn';
-import { nextTheme } from '../lib/themes';
 import { resolveAppIcon } from '../lib/appIcons';
 import { APP_LOGOS } from '../lib/appLogos';
 import { getPinnedApp, isAppVisible, getOrderedApps } from '../lib/appVisibility';
 import type { AppKey, ViewKey } from '../types';
 import AboutDialog from './AboutDialog';
 import SystemDialog from './SystemDialog';
+import ThemePopover from './ThemePopover';
 
 export type { ViewKey };
 
@@ -101,7 +101,6 @@ export default function Sidebar({
   view: ViewKey;
   onNav: (v: ViewKey) => void;
 }) {
-  const pushToast = useAppStore((s) => s.pushToast);
   const activeApp = useAppStore((s) => s.activeApp);
   const setActiveApp = useAppStore((s) => s.setActiveApp);
   const setShowApiManager = useAppStore((s) => s.setShowApiManager);
@@ -146,19 +145,9 @@ export default function Sidebar({
       ? BUDDYAI_NAV
       : NAV;
 
-  // 主题轮询：每次点击切换到下一个主题并持久化
-  const cycleTheme = async () => {
-    const { settings, saveSettings } = useAppStore.getState();
-    if (!settings) return;
-    const next = nextTheme(settings.theme);
-    try {
-      // 审查修复（L34）：saveSettings 即 patch 语义，只提交 theme 字段，不回传整份 settings 快照（patch 纪律）
-      await saveSettings({ theme: next.id });
-      pushToast('success', `主题已切换：${next.name}`);
-    } catch {
-      /* toast 已发出 */
-    }
-  };
+  // 主题气泡：点击调色盘在按钮上方展开主题列表，点选即生效
+  const [themeAnchor, setThemeAnchor] = useState<DOMRect | null>(null);
+  const themeBtnRef = useRef<HTMLButtonElement>(null);
 
   return (
     <aside className="app-sidebar sticky left-0 z-10 flex w-52 shrink-0 flex-col border-r border-slate-200/70 bg-white dark:border-zinc-800/70 dark:bg-zinc-900/30">
@@ -244,10 +233,17 @@ export default function Sidebar({
           <SlidersHorizontal size={17} />
         </button>
         <button
-          onClick={() => void cycleTheme()}
-          className={footerBtn}
-          aria-label="切换主题"
-          title="切换主题（在所有主题间轮询）"
+          ref={themeBtnRef}
+          onClick={() => {
+            // 只在这里做 toggle；气泡内部的外部点击检测会排除本按钮，
+            // 否则 mousedown 先关闭、click 再打开，表现为「点两下重复打开」
+            if (themeAnchor) setThemeAnchor(null);
+            else if (themeBtnRef.current) setThemeAnchor(themeBtnRef.current.getBoundingClientRect());
+          }}
+          className={cn(footerBtn, themeAnchor && 'bg-slate-100 text-slate-700 dark:bg-zinc-800/70 dark:text-zinc-100')}
+          aria-label="选择主题"
+          aria-expanded={themeAnchor != null}
+          title="选择主题"
         >
           <Palette size={17} />
         </button>
@@ -262,12 +258,15 @@ export default function Sidebar({
       </div>
       <AboutDialog open={showAbout} onClose={() => setShowAbout(false)} />
       <SystemDialog open={showSystem} onClose={() => setShowSystem(false)} />
+      {themeAnchor && (
+        <ThemePopover anchor={themeAnchor} anchorEl={themeBtnRef.current} onClose={() => setThemeAnchor(null)} />
+      )}
     </aside>
   );
 }
 
 const footerBtn =
-  'flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 active:bg-slate-200/70 dark:text-zinc-500 dark:hover:bg-zinc-800/70 dark:hover:text-zinc-200';
+  'relative flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 active:bg-slate-200/70 dark:text-zinc-500 dark:hover:bg-zinc-800/70 dark:hover:text-zinc-200';
 
 /** 侧栏导航项：弱化底色的选中态 + 左侧极短强调条（替代整块黑底，降低视觉重量） */
 function NavButton({

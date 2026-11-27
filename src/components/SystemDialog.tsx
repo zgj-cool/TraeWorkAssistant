@@ -47,9 +47,10 @@ export default function SystemDialog({ open, onClose }: { open: boolean; onClose
 
         <div className="flex min-h-0 flex-1 flex-col">
           {tab === 'settings' ? (
-            <div className="min-h-0 flex-1 overflow-auto pr-1">
-              <GeneralSettingsPanel />
-            </div>
+            /* 滚动交给 GeneralSettingsPanel 自己管：它的保存栏要固定在滚动区之外，
+               若在这里再包一层 overflow-auto，保存栏只能 sticky，而 sticky 的
+               半透明底色会在滚动时透出下方内容、出现一条灰带 */
+            <GeneralSettingsPanel />
           ) : (
             <Logs embedded />
           )}

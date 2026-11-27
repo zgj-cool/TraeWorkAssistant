@@ -48,7 +48,8 @@ export interface ChartTheme {
 }
 
 export function chartTheme(isDark: boolean, themeId?: string): ChartTheme {
-  if (themeId === 'liquid-glass') return glassTheme();
+  if (themeId === 'neon-forest') return forestTheme();
+  if (themeId === 'neon-ocean') return oceanTheme();
   return isDark
     ? {
         isDark,
@@ -118,46 +119,90 @@ export function chartTheme(isDark: boolean, themeId?: string): ChartTheme {
 }
 
 /**
- * 液态玻璃专用配色：青绿 → 冰蓝的冷色渐变序列，替换默认的「暖铜强调 + 墨阶」。
- * 深色玻璃底上暖铜会显脏，冷色系才有折射感；首项仍是最亮的强调色，
- * 保持「Top1 自然成为焦点」的既有读图逻辑。tooltip 走半透明玻璃表面。
+ * 荧光墨绿专用配色：荧光薄荷绿作唯一强调，其余走深绿墨阶。
+ * 深绿底上暖铜会显脏，只有冷绿系能保持「仪表盘」的干净感；
+ * 首项仍是最亮的强调色，保持「Top1 自然成为焦点」的既有读图逻辑。
  */
-function glassTheme(): ChartTheme {
+function forestTheme(): ChartTheme {
   return {
     isDark: true,
-    grid: 'rgba(255,255,255,0.07)',
-    axisLine: 'rgba(255,255,255,0.09)',
-    axisTick: 'rgba(214,236,241,0.55)',
-    cursor: 'rgba(111,242,221,0.28)',
+    grid: 'rgba(59, 230, 152, 0.095)',
+    axisLine: 'rgba(59, 230, 152, 0.152)',
+    axisTick: 'rgba(214,242,228,0.55)',
+    cursor: 'rgba(59, 230, 152, 0.304)',
     tooltip: {
       fontSize: 12,
-      borderRadius: 12,
-      border: '1px solid rgba(255,255,255,0.14)',
-      background: 'rgba(12,20,27,0.92)',
-      color: '#eafcff',
-      boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.14), 0 18px 40px -18px rgba(0,0,0,0.9)',
+      borderRadius: 10,
+      border: '1px solid rgba(59, 230, 152, 0.228)',
+      background: 'rgba(7,26,18,0.96)',
+      color: '#eafff5',
+      boxShadow: '0 18px 40px -18px rgba(0,0,0,0.9)',
       padding: '8px 12px',
-      backdropFilter: 'blur(14px)',
     } as CSSProperties,
-    accent: '#6ff2dd',
-    accentSoft: '#7aa2ff',
-    ink: '#d6ecf1',
-    inkSoft: 'rgba(214,236,241,0.55)',
-    ramp: ['#6ff2dd', '#7aa2ff', '#a8e6f0', '#6f9fd8', '#8fd0d8', '#5c7fa8'],
-    rest: 'rgba(214,236,241,0.22)',
+    accent: '#3be698',
+    accentSoft: '#76d5ab',
+    ink: '#d6f2e4',
+    inkSoft: 'rgba(214,242,228,0.55)',
+    ramp: ['#3be698', '#76d5ab', '#43af83', '#88dbba', '#3a8868', '#669d85'],
+    rest: 'rgba(214,242,228,0.22)',
     stack: {
-      cache_write: 'rgba(214,236,241,0.28)',
-      cache_read: 'rgba(214,236,241,0.46)',
-      new_input: '#7aa2ff',
-      output: '#6ff2dd',
+      cache_write: 'rgba(214,242,228,0.26)',
+      cache_read: 'rgba(214,242,228,0.44)',
+      new_input: '#76d5ab',
+      output: '#3be698',
     },
     heat: {
-      empty: 'rgba(255,255,255,0.05)',
+      empty: 'rgba(59, 230, 152, 0.057)',
       levels: [
-        'rgba(111,242,221,0.2)',
-        'rgba(111,242,221,0.4)',
-        'rgba(111,242,221,0.62)',
-        'rgba(111,242,221,0.88)',
+        'rgba(59, 230, 152, 0.171)',
+        'rgba(59, 230, 152, 0.342)',
+        'rgba(59, 230, 152, 0.551)',
+        'rgba(59, 230, 152, 0.807)',
+      ],
+    },
+  };
+}
+
+/**
+ * 荧光浅蓝专用配色：与 forestTheme 同构，但强调色取浅蓝（天蓝）。
+ * 两者刻意共用一个「色谱公式」（强调色 + 同色相墨阶 + 同 alpha 梯度），
+ * 只换基色，这样两套主题的图表读起来是同一套语言，切换时不会觉得换了张图。
+ */
+function oceanTheme(): ChartTheme {
+  return {
+    isDark: true,
+    grid: 'rgba(120, 166, 223, 0.095)',
+    axisLine: 'rgba(120, 166, 223, 0.152)',
+    axisTick: 'rgba(214,228,242,0.55)',
+    cursor: 'rgba(120, 166, 223, 0.304)',
+    tooltip: {
+      fontSize: 12,
+      borderRadius: 10,
+      border: '1px solid rgba(120, 166, 223, 0.228)',
+      background: 'rgba(7,17,26,0.96)',
+      color: '#eaf2ff',
+      boxShadow: '0 18px 40px -18px rgba(0,0,0,0.9)',
+      padding: '8px 12px',
+    } as CSSProperties,
+    accent: '#78a6df',
+    accentSoft: '#a8c6ee',
+    ink: '#d6e1f2',
+    inkSoft: 'rgba(214,228,242,0.55)',
+    ramp: ['#78a6df', '#a8c6ee', '#6799d8', '#c4d9f2', '#4c87d1', '#8bb4e8'],
+    rest: 'rgba(214,228,242,0.22)',
+    stack: {
+      cache_write: 'rgba(214,228,242,0.26)',
+      cache_read: 'rgba(214,228,242,0.44)',
+      new_input: '#a8c6ee',
+      output: '#78a6df',
+    },
+    heat: {
+      empty: 'rgba(120, 166, 223, 0.057)',
+      levels: [
+        'rgba(120, 166, 223, 0.171)',
+        'rgba(120, 166, 223, 0.342)',
+        'rgba(120, 166, 223, 0.551)',
+        'rgba(120, 166, 223, 0.807)',
       ],
     },
   };
