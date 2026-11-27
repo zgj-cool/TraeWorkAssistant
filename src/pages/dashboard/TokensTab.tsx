@@ -11,35 +11,30 @@ import {
   Legend,
 } from 'recharts';
 import { Activity } from 'lucide-react';
-import ChartFilterBar, { SOURCE_LABELS, type BoardSource } from '../../components/ChartFilterBar';
+import ChartFilterBar from '../../components/ChartFilterBar';
 import ActivityHeatmap from '../../components/charts/ActivityHeatmap';
 import ModelTrendChart from '../../components/charts/ModelTrendChart';
 import { Badge, EmptyState, StatCard } from '../../components/ui';
 import { useDateRange } from '../../hooks/useDateRange';
 import { axisPropsOf, useChartTheme } from '../../lib/chartTheme';
-import type { UsageDayView, UsageHistoryResult, WbTokenStats } from '../../types';
+import type { UsageDayView, UsageHistoryResult } from '../../types';
 import type { PlatformScope } from './KpiRow';
 import { buildModelTrend } from './modelTrend';
 
 /**
  * Token 统计 Tab（credits-dashboard-plan.md §3.2/§5.2，批次 3 = issue #35 Bug2 用户可见修复）：
- * ① 总 Token 统计卡（总/输入/输出/缓存命中率；Trae 网关源条件渲染第 5 张
- *    「账单口径缓存」对账卡，issue #169）
+ * ① 总 Token 统计卡（总/输入/输出/缓存命中率；Trae 追加「账单口径缓存」对账卡，issue #169）
  * ② Token 与调用趋势（双轴堆叠柱 + 调用虚线）
  * ③ 各模型消耗趋势（issue #160）④ 年度活动热力图。
- * 三源（口径不同，独立展示不合并）：
- * 本地 = workbuddy_token_stats（365 天，WorkBuddy 桌面端会话 `~/.workbuddy/projects` +
- *        CodeBuddy CLI `~/.codebuddy/projects` + CodeBuddy IDE 会话索引 requests[]
- *        `%LOCALAPPDATA%\CodeBuddyExtension\Data\`；未走本地记录的流量仍由「API网关」源单列）；
- * API 网关 = api_usage_stats / api_wb_usage_stats（90 天，代理转发口径；custom 池仅 API 服务页展示）；
- * 官网 = Trae usage_history token 字段（365 天）；Buddy 官网无按日 token 明细（§8.2 诚实空态）。
- * 统一口径：总 Token = input + output + cache_write（官网/网关 cache_write 恒 0，即 input + output）；
- * 官网 input 按供应商语义假设已含缓存读取（与本地源一致），新增输入 = max(0, input − 缓存读取)。
+ * 数据源固定为 API 网关（api_usage_stats / api_wb_usage_stats / qoder 池，90 天代理转发口径）；
+ * 本地会话扫描（workbuddy_token_stats）与官网 token 字段两个口径已下线——与网关实测差异大，
+ * 统一以网关转发口径为准。仅覆盖走本地网关的流量，直连官方的流量不在内（页面明示）。
+ * 统一口径：总 Token = input + output（网关 cache_write 恒 0）。
  * issue #169：Trae 上游 2026-10-28 起 token_usage 事件显式下发 cached_tokens=0（账单侧
  * cache_read 正常计费），网关转发口径单请求无法恢复真实缓存值（不伪造，出站保持 0）。
- * Trae 平台网关源并列展示官网账单口径 cache_read 作对账参照（数据独立不混合）。
- * 缓存命中率：三源同口径（缓存读取 / 输入总量）。网关源不再一律置空——WB/Qoder 池
- * 有真实 cached_tokens 入账即出比率，仅「确实无下发」时显示「—」，避免把可用数据一并隐藏。
+ * Trae 平台并列展示官网账单口径 cache_read 作对账参照（数据独立不混合）。
+ * 缓存命中率：缓存读取 / 输入总量；网关有真实 cached_tokens 入账即出比率，
+ * 仅「确实无下发」时显示「—」，避免把可用数据一并隐藏。
  */
 
 const SEG_LABELS: Record<string, string> = {
@@ -74,38 +69,27 @@ const emptyAgg = (): DayAgg => ({ input: 0, output: 0, cache_read: 0, cache_writ
 
 export default function TokensTab({
   scope,
-  source,
   usage,
-  tokenStats,
   gateway,
 }: {
   scope: PlatformScope;
-  /** 激活数据源（源切换控件在页面第二层分类，Dashboard 承载；默认源按平台选择） */
-  source: BoardSource;
-  /** Trae 官网消耗明细（官网源 token 字段数据源） */
+  /** Trae 官网消耗明细（仅用于「账单口径缓存」对账卡，issue #169） */
   usage: UsageHistoryResult | null;
-  /** 本地 Token 统计（workbuddy_token_stats，365 天） */
-  tokenStats: WbTokenStats | null;
-  /** API 网关 Trae/Buddy/Qoder 池用量（90 天） */
+  /** API 网关 Trae/Buddy/Qoder 池用量（90 天，唯一数据源） */
   gateway: GatewayDays | null;
 }) {
   const chart = useChartTheme();
   // 统计周期默认「今日」（与积分统计 Tab 一致）
   const { range, setRange, startStr, todayStr, dateList } = useDateRange('today');
   const [modelFilter, setModelFilter] = useState('');
-  // 切源时清空模型筛选：旧源的模型在新源列表中不存在，残留会让趋势静默归零（审查修复）
-  useEffect(() => setModelFilter(''), [source]);
+  // 切平台时清空模型筛选：旧平台模型在新平台列表中不存在，残留会让趋势静默归零
+  useEffect(() => setModelFilter(''), [scope]);
 
   // 精确等值（三平台扩展）：二元取反会让 qoder 页同时命中 trae/buddy 分支
   const traeActive = scope === 'trae';
-  const buddyActive = scope === 'buddy';
   const inRange = (date: string) => date >= startStr && date <= todayStr;
 
-  // ---- 源可用性（§8 诚实空态兜底；源禁用说明在页面第二层分类的切换控件上）----
-  const localUnavailable = source === 'local' && !buddyActive;
-  const officialUnavailable = source === 'official' && !traeActive;
-
-  // ---- 范围 × 模型 × 平台 聚合 ----
+  // ---- 范围 × 模型 × 平台 聚合（API 网关） ----
   const agg = useMemo(() => {
     const byDate = new Map<string, DayAgg>();
     // 各模型消耗趋势（issue #160）：模型 → 日期 → 数值（恒为全模型，不随模型筛选联动）
@@ -128,39 +112,20 @@ export default function TokensTab({
       byDate.set(date, cur);
     };
 
-    if (source === 'local' && buddyActive && tokenStats) {
-      for (const [model, points] of Object.entries(tokenStats.daily_by_model)) {
-        for (const p of points) {
-          if (!p.date || !inRange(p.date)) continue;
-          // 趋势恒为全模型（总 Token 口径 = input + output + cache_write），先累积再走模型筛选
-          addModelDay(p.date, model, (p.input ?? 0) + (p.output ?? 0) + (p.cache_write ?? 0));
-          if (modelFilter && model !== modelFilter) continue;
-          addDay(p.date, {
-            input: p.input ?? 0,
-            output: p.output ?? 0,
-            cache_read: p.cache_read ?? 0,
-            cache_write: p.cache_write ?? 0,
-            calls: p.calls ?? 0,
-          });
-        }
-      }
-    }
-    if (source === 'gateway') {
-      for (const day of gwPoolsFor(gateway, scope)) {
-        if (!inRange(day.date)) continue;
-        // issue #169 审查修复：缓存读取数据驱动（UsageDayView.cached_tokens），不再硬编码 0；
-        // Trae 池当前上游显式下发 0（展示如实为 0），WB/Qoder 池有真实入账
-        addDay(day.date, {
-          input: day.prompt_tokens,
-          output: day.completion_tokens,
-          cache_read: day.cached_tokens ?? 0,
-          cache_write: 0,
-          calls: day.total_requests,
-        });
-        for (const m of day.models) {
-          // 趋势图恒为全模型；网关源无按模型 token 明细，趋势口径 = 请求数（§3.1 同款诚实声明）
-          addModelDay(day.date, m.name, m.requests);
-        }
+    for (const day of gwPoolsFor(gateway, scope)) {
+      if (!inRange(day.date)) continue;
+      // issue #169 审查修复：缓存读取数据驱动（UsageDayView.cached_tokens），不再硬编码 0；
+      // Trae 池当前上游显式下发 0（展示如实为 0），WB/Qoder 池有真实入账
+      addDay(day.date, {
+        input: day.prompt_tokens,
+        output: day.completion_tokens,
+        cache_read: day.cached_tokens ?? 0,
+        cache_write: 0,
+        calls: day.total_requests,
+      });
+      for (const m of day.models) {
+        // 趋势图恒为全模型；网关源无按模型 token 明细，趋势口径 = 请求数（§3.1 同款诚实声明）
+        addModelDay(day.date, m.name, m.requests);
       }
     }
     // Trae 网关源的账单口径缓存对账（issue #169）：官网 usage_history 的 cache_read
@@ -170,7 +135,7 @@ export default function TokensTab({
     // days 按自然日去重：accounts × daily 双层循环下多账号同日有缓存会重复计数
     const billingCacheRead = { total: 0, input: 0, days: 0 };
     const billingCacheDays = new Set<string>();
-    if (source === 'gateway' && traeActive && usage) {
+    if (traeActive && usage) {
       for (const a of usage.accounts) {
         for (const d of a.daily) {
           if (!inRange(d.date)) continue;
@@ -181,20 +146,6 @@ export default function TokensTab({
       }
       billingCacheRead.days = billingCacheDays.size;
     }
-    if (source === 'official' && traeActive && usage) {
-      for (const a of usage.accounts) {
-        for (const d of a.daily) {
-          if (!inRange(d.date)) continue;
-          addDay(d.date, {
-            input: d.input_tokens,
-            output: d.output_tokens,
-            cache_read: d.cache_read_tokens,
-            cache_write: 0,
-            calls: d.sessions,
-          });
-        }
-      }
-    }
     let input = 0, output = 0, cache_read = 0, cache_write = 0, calls = 0;
     for (const v of byDate.values()) {
       input += v.input;
@@ -204,113 +155,71 @@ export default function TokensTab({
       calls += v.calls;
     }
     return { byDate, modelByDate, input, output, cache_read, cache_write, calls, billingCacheRead };
-  }, [source, buddyActive, traeActive, tokenStats, gateway, scope, usage, modelFilter, startStr, todayStr]);
+  }, [traeActive, gateway, scope, usage, modelFilter, startStr, todayStr]);
 
   // ---- 口径派生：总 Token / 缓存命中率 / 堆叠段 ----
-  // 统一口径：总 Token = input + output + cache_write（官网/网关 cache_write 恒 0）；
-  // 官网 input 假设已含缓存读取（与本地源供应商语义一致），不重复计。
+  // 统一口径：总 Token = input + output（网关 cache_write 恒 0）
   const totalTokens = agg.input + agg.output + agg.cache_write;
-  // 缓存命中率三源同口径（缓存读取 / 输入总量；input 按供应商语义已含缓存读取）。
-  // 网关源此前恒为 null（issue #169 只针对 Trae 池上游显式下发 0 的场景），连带把
-  // WB/Qoder 池已真实入账的 cached_tokens 一并吞掉，出现「都没有缓存命中率」。
-  // 现改为数据驱动：网关源有缓存测量即出比率，确实无下发时如实显示「—」（不伪造
-  // 0%）；本地/官网源维持原语义（input>0 即成比率，无缓存读取如实为 0.0%）。
-  const hitRate =
-    agg.input > 0 && (source !== 'gateway' || agg.cache_read > 0)
-      ? agg.cache_read / agg.input
-      : null;
-  // Trae 网关源账单口径缓存命中率（issue #169 对账）：官方账单 cache_read / 官网 input
-  // （官网 input 按供应商语义已含缓存读取，与官网源 hitRate 同分母口径）。转发口径恒 0
+  // 数据驱动：网关源有缓存测量即出比率，确实无下发时如实显示「—」（不伪造 0%）
+  const hitRate = agg.input > 0 && agg.cache_read > 0 ? agg.cache_read / agg.input : null;
+  // Trae 账单口径缓存命中率（issue #169 对账）：官方账单 cache_read / 官网 input
+  // （官网 input 按供应商语义已含缓存读取，与官网口径同分母）。转发口径恒 0
   // 时用户在此直接看到真实命中率
   const billingHitRate =
     traeActive && agg.billingCacheRead.total > 0 && agg.billingCacheRead.input > 0
       ? agg.billingCacheRead.total / agg.billingCacheRead.input
       : null;
-  // 网关源同样按「缓存读取 + 新增输入 + 输出」堆叠：WB/Qoder 池有真实缓存入账时
+  // 网关源按「缓存读取 + 新增输入 + 输出」堆叠：WB/Qoder 池有真实缓存入账时
   // 才出现缓存段（Trae 池上游恒 0 时该段自然为空，柱形与旧「输入/输出」一致）
-  const segments =
-    source === 'local'
-      ? (['cache_read', 'new_input', 'output', 'cache_write'] as const)
-      : (['cache_read', 'new_input', 'output'] as const);
+  const segments = ['cache_read', 'new_input', 'output'] as const;
 
   // ---- 趋势数据（堆叠柱 + 调用虚线）----
   const trend = useMemo(
     () =>
       dateList.map((date) => {
         const a = agg.byDate.get(date) ?? emptyAgg();
-        const row: Record<string, number | string> = {
+        return {
           label:
             range === 'year'
               ? `${+date.slice(0, 4)}/${+date.slice(5, 7)}/${+date.slice(8, 10)}`
               : `${+date.slice(5, 7)}/${+date.slice(8, 10)}`,
           calls: a.calls,
+          // 统一口径：input 按供应商语义含缓存读取，拆分为 缓存读取 + 新增输入
+          //（柱总高 = input + output，与总卡一致；网关源缓存恒 0 时新增输入 = 输入）
+          cache_read: a.cache_read,
+          new_input: Math.max(0, a.input - a.cache_read),
+          output: a.output,
         };
-        // 三源统一：input 均按供应商语义含缓存读取，拆分为 缓存读取 + 新增输入
-        //（柱总高 = input + output，与总卡一致；网关源缓存恒 0 时新增输入 = 输入）
-        row.cache_read = a.cache_read;
-        row.new_input = Math.max(0, a.input - a.cache_read);
-        row.output = a.output;
-        if (source === 'local') row.cache_write = a.cache_write;
-        return row;
       }),
-    [dateList, range, agg, source],
+    [dateList, range, agg],
   );
-  const chartEmpty = trend.every((d) => (d.calls as number) === 0 && segments.every((k) => !(d[k] as number)));
+  const chartEmpty = trend.every((d) => d.calls === 0 && segments.every((k) => !d[k]));
   const showDots = range === 'today' || range === '7d';
 
   // ---- 各模型消耗趋势（issue #160：日 × 模型折线，Top8 + 其他聚合）----
-  // local = 按模型 token（总 Token 口径：input + output + cache_write）；gateway = 请求数（无按模型 token 明细，
-  // 诚实声明）；official 无按模型明细 → 诚实空态。恒为全模型，不随模型筛选联动。
-  const hasModelDaily = source === 'local' || source === 'gateway';
+  // 网关源无按模型 token 明细，趋势口径 = 请求数（诚实声明）。恒为全模型，不随模型筛选联动。
   const modelTrend = useMemo(
     () => buildModelTrend(agg.modelByDate, dateList, range),
     [agg.modelByDate, dateList, range],
   );
-  const modelFmt = source === 'local' ? fmtTokens : (n: number) => n.toLocaleString('zh-CN');
-  const modelUnitLabel = source === 'local' ? 'tokens' : '请求数';
 
-  // ---- 会话总数（§3.3：local=summary.calls；gateway=范围内请求合计；official=范围内 sessions）----
-  const sessions = useMemo(() => {
-    if (source === 'local') return tokenStats?.summary.calls ?? null;
-    if (source === 'gateway') return gwPoolsFor(gateway, scope).reduce((s, d) => s + d.total_requests, 0);
-    if (!traeActive || !usage) return null;
-    return usage.accounts.reduce(
-      (s, a) => s + a.daily.reduce((x, d) => (inRange(d.date) ? x + d.sessions : x), 0),
-      0,
-    );
-  }, [source, tokenStats, gateway, scope, usage, traeActive, startStr, todayStr]);
+  // ---- 会话总数（§3.3：范围内请求合计）----
+  const sessions = useMemo(
+    () => gwPoolsFor(gateway, scope).reduce((s, d) => s + d.total_requests, 0),
+    [gateway, scope],
+  );
 
-  // ---- 年度热力图（全量历史，不受区间筛选影响；local 受模型筛选，与原 TokenStatsPanel 一致）----
+  // ---- 年度热力图（全量历史，不受区间筛选影响）----
   const heatValues = useMemo(() => {
     const m = new Map<string, number>();
-    if (source === 'local' && buddyActive && tokenStats) {
-      const fill = (pts: { date?: string; total?: number }[]) =>
-        pts.forEach((p) => p.date && m.set(p.date, (m.get(p.date) ?? 0) + (p.total ?? 0)));
-      if (modelFilter) fill(tokenStats.daily_by_model[modelFilter] ?? []);
-      else fill(tokenStats.daily);
-    } else if (source === 'gateway') {
-      for (const d of gwPoolsFor(gateway, scope)) {
-        m.set(d.date, (m.get(d.date) ?? 0) + d.prompt_tokens + d.completion_tokens);
-      }
-    } else if (source === 'official' && traeActive && usage) {
-      for (const a of usage.accounts) {
-        for (const d of a.daily) {
-          m.set(d.date, (m.get(d.date) ?? 0) + d.input_tokens + d.output_tokens);
-        }
-      }
+    for (const d of gwPoolsFor(gateway, scope)) {
+      m.set(d.date, (m.get(d.date) ?? 0) + d.prompt_tokens + d.completion_tokens);
     }
     return m;
-  }, [source, buddyActive, traeActive, tokenStats, gateway, scope, usage, modelFilter]);
+  }, [gateway, scope]);
 
-  // ---- 覆盖窗口标注（§8.1；Qoder 仅网关源有数据，本地/官网空态不显示窗口文案）----
-  const coverage =
-    scope === 'qoder' && source !== 'gateway'
-      ? ''
-      : source === 'local'
-        ? `本地 ${tokenStats?.window_days ?? 365} 天（~/.workbuddy + ~/.codebuddy 会话）`
-        : source === 'gateway'
-          ? '网关 90 天'
-          : 'Trae 365 天 · Buddy 无接口';
+  // ---- 覆盖窗口标注（§8.1）----
+  const coverage = '网关 90 天';
 
   // Token 分项用中性墨阶（缓存写/读 → 新输入 → 输出逐级加深），保持「单强调色」基调；
   // 「调用次数」虚线用强调色，避免再引入第四种色相。
@@ -324,18 +233,6 @@ export default function TokensTab({
   const tooltipStyle = chart.tooltip;
   const axisProps = axisPropsOf(chart);
 
-  // Qoder 官网无 token 接口、本地日志 token 恒为 0；唯一可用数据源是 API 网关 Qoder 池
-  //（issue #82 T2.4：网关从上游 usage 落库 prompt/completion tokens），网关源正常渲染
-  const qoderUnavailable = scope === 'qoder' && source !== 'gateway';
-  const unavailableHint =
-    qoderUnavailable
-      ? { title: 'Qoder 暂无 Token 统计数据源', hint: 'Qoder 官网未提供 token 用量接口；本地日志的 token 字段恒为占位 0（官方模型计费在服务端）。请切换「API网关」源查看经本地网关转发请求实测落库的 token 统计。' }
-      : localUnavailable
-        ? { title: '本地源无 Trae 数据', hint: '本地源 = WorkBuddy 桌面端 + CodeBuddy IDE 会话统计；Trae 无本地源，切「官网」查看 Trae token 明细。' }
-        : officialUnavailable
-          ? { title: 'Buddy 官网未提供按日明细接口', hint: 'Token 的 input/output 日明细官网仅 Trae 提供；Buddy 请切「本地」或「API网关」源。' }
-          : null;
-
   return (
     <div className="card p-5">
       <ChartFilterBar
@@ -343,29 +240,17 @@ export default function TokensTab({
         icon={<Activity size={16} className="text-indigo-500" />}
         badges={
           <>
-            <Badge tone="slate">{SOURCE_LABELS[source]}源</Badge>
-            {source === 'local' && tokenStats && (
-              <>
-                <Badge tone="slate">{tokenStats.files_scanned} 个会话文件</Badge>
-                {tokenStats.parse_errors > 0 && <Badge tone="amber">{tokenStats.parse_errors} 行解析失败</Badge>}
-              </>
-            )}
-            {source === 'gateway' && (
-              <Badge tone="slate">
-                {scope === 'trae' ? 'Trae 池' : scope === 'buddy' ? 'Buddy 池' : 'Qoder 池'} · {gwPoolsFor(gateway, scope).length} 个日桶
-              </Badge>
-            )}
-            {source === 'official' && usage?.cached && <Badge tone="slate">纯缓存读取</Badge>}
+            <Badge tone="slate">API 网关源</Badge>
+            <Badge tone="amber" title="本地会话扫描与官网 token 字段两个口径已下线；网关转发实测为准，直连官方的流量不在统计内。">
+              仅覆盖走网关流量
+            </Badge>
+            <Badge tone="slate">
+              {scope === 'trae' ? 'Trae 池' : scope === 'buddy' ? 'Buddy 池' : 'Qoder 池'} · {gwPoolsFor(gateway, scope).length} 个日桶
+            </Badge>
           </>
         }
         sessions={sessions}
-        models={
-          source === 'local'
-            ? (tokenStats?.models ?? []).map((m) => m.key ?? '').filter(Boolean)
-            : source === 'gateway'
-              ? [...new Set(gwPoolsFor(gateway, scope).flatMap((d) => d.models.map((m) => m.name)))].sort()
-              : []
-        }
+        models={[...new Set(gwPoolsFor(gateway, scope).flatMap((d) => d.models.map((m) => m.name)))].sort()}
         modelFilter={modelFilter}
         onModelFilter={setModelFilter}
         range={range}
@@ -373,165 +258,123 @@ export default function TokensTab({
         extra={coverage ? <span className="hidden text-xs text-slate-400 lg:inline">{coverage}</span> : undefined}
       />
 
-      {unavailableHint ? (
-        <EmptyState icon={<Activity size={22} />} title={unavailableHint.title} hint={unavailableHint.hint} />
-      ) : (
-        <>
-          {/* ① 总 Token 统计卡（4 卡；Trae 网关源追加「账单口径缓存」对账卡 = 5 卡） */}
-          <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-            <StatCard
-              label="总 Token"
-              value={fmtTokens(totalTokens)}
-              hint={`${agg.calls.toLocaleString()} 次${source === 'gateway' ? '请求' : '调用'}`}
-              tone="brand"
-            />
-            <StatCard
-              label="输入 Token"
-              value={fmtTokens(agg.input)}
-              hint={
-                source !== 'gateway'
-                  ? `其中缓存读取 ${fmtTokens(agg.cache_read)}`
-                  : agg.cache_read > 0
-                    ? `其中缓存读取 ${fmtTokens(agg.cache_read)}`
-                    : undefined
-              }
-              tone="violet"
-            />
-            <StatCard
-              label="输出 Token"
-              value={fmtTokens(agg.output)}
-              hint={source === 'local' ? `缓存写入 ${fmtTokens(agg.cache_write)}` : undefined}
-              tone="green"
-            />
-            <StatCard
-              label="缓存命中率"
-              value={hitRate != null ? `${(hitRate * 100).toFixed(1)}%` : '—'}
-              hint={
-                source === 'gateway'
-                  ? // 数据驱动：有缓存测量即出命中率；确实无下发时如实提示（不伪造 0%）
-                    (hitRate != null
-                      ? `转发口径 · 缓存读取 / 输入总量`
-                      : '转发口径无缓存测量（上游未下发缓存字段）') +
-                    (agg.billingCacheRead.total > 0
-                      ? ` · 账单口径 ${fmtTokens(agg.billingCacheRead.total)}`
-                      : '')
-                  : source === 'official'
-                    ? '口径：缓存读取 / 输入总量（假设官网 input 已含缓存读取）'
-                    : '口径：缓存读取 / 输入总量'
-              }
-              tone="amber"
-            />
-            {/* Trae 网关源账单口径缓存对账卡（issue #169）：转发口径恒 0，官方账单
-                cache_read 真实计费；独立卡片并列展示，不混入转发口径统计 */}
-            {source === 'gateway' && traeActive && (
-              <StatCard
-                label="账单口径缓存"
-                value={fmtTokens(agg.billingCacheRead.total)}
-                hint={
-                  agg.billingCacheRead.total > 0
-                    ? `Trae 官网计费 cache_read · ${agg.billingCacheRead.days} 天有缓存 · 命中率 ${billingHitRate != null ? `${(billingHitRate * 100).toFixed(1)}%` : '—'}`
-                    : '官网明细暂无缓存记录（点「刷新数据」拉取消耗明细）'
-                }
-                tone="violet"
-              />
-            )}
-          </div>
+      {/* ① 总 Token 统计卡（4 卡；Trae 追加「账单口径缓存」对账卡 = 5 卡） */}
+      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+        <StatCard
+          label="总 Token"
+          value={fmtTokens(totalTokens)}
+          hint={`${agg.calls.toLocaleString()} 次请求`}
+          tone="brand"
+        />
+        <StatCard
+          label="输入 Token"
+          value={fmtTokens(agg.input)}
+          hint={agg.cache_read > 0 ? `其中缓存读取 ${fmtTokens(agg.cache_read)}` : undefined}
+          tone="violet"
+        />
+        <StatCard label="输出 Token" value={fmtTokens(agg.output)} tone="green" />
+        <StatCard
+          label="缓存命中率"
+          value={hitRate != null ? `${(hitRate * 100).toFixed(1)}%` : '—'}
+          hint={
+            // 数据驱动：有缓存测量即出命中率；确实无下发时如实提示（不伪造 0%）
+            (hitRate != null ? '转发口径 · 缓存读取 / 输入总量' : '转发口径无缓存测量（上游未下发缓存字段）') +
+            (agg.billingCacheRead.total > 0 ? ` · 账单口径 ${fmtTokens(agg.billingCacheRead.total)}` : '')
+          }
+          tone="amber"
+        />
+        {/* Trae 账单口径缓存对账卡（issue #169）：转发口径恒 0，官方账单
+            cache_read 真实计费；独立卡片并列展示，不混入转发口径统计 */}
+        {traeActive && (
+          <StatCard
+            label="账单口径缓存"
+            value={fmtTokens(agg.billingCacheRead.total)}
+            hint={
+              agg.billingCacheRead.total > 0
+                ? `Trae 官网计费 cache_read · ${agg.billingCacheRead.days} 天有缓存 · 命中率 ${billingHitRate != null ? `${(billingHitRate * 100).toFixed(1)}%` : '—'}`
+                : '官网明细暂无缓存记录（点「刷新数据」拉取消耗明细）'
+            }
+            tone="violet"
+          />
+        )}
+      </div>
 
-          {/* ② Token 与调用趋势（双轴：堆叠柱 + 调用虚线） */}
-          <div className="mt-5">
-            <div className="mb-2 text-sm font-medium">Token 与调用趋势</div>
-            {chartEmpty ? (
-              <EmptyState
-                icon={<Activity size={22} />}
-                title="暂无趋势数据"
-                hint={
-                  source === 'local'
-                    ? '本地会话产生用量后这里会展示逐日 Token 构成与调用次数。'
-                    : source === 'gateway'
-                      ? '网关代理转发产生用量后展示（保留 90 天）；可在 API 服务页查看实时用量。'
-                      : '点击右上角「刷新数据」增量拉取 Trae 官网 token 明细。'
-                }
-              />
-            ) : (
-              <div className="h-64">
-                <ResponsiveContainer>
-                  <ComposedChart data={trend} margin={{ top: 12, right: 8, left: 0, bottom: 4 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke={chart.grid} opacity={0.25} vertical={false} />
-                    <XAxis dataKey="label" {...axisProps} minTickGap={24} />
-                    <YAxis yAxisId="tokens" {...axisProps} axisLine={false} width={56} tickFormatter={(v: number) => fmtTokens(v)} />
-                    <YAxis yAxisId="calls" orientation="right" {...axisProps} axisLine={false} width={40} />
-                    <Tooltip
-                      contentStyle={tooltipStyle}
-                      formatter={(v: number, name: string) => [
-                        name === 'calls' ? String(v) : fmtTokens(v),
-                        SEG_LABELS[name] ?? (name === 'calls' ? '调用次数' : name),
-                      ]}
-                    />
-                    <Legend wrapperStyle={{ fontSize: 12 }} />
-                    {segments.map((k) => (
-                      <Bar
-                        key={k}
-                        yAxisId="tokens"
-                        dataKey={k}
-                        stackId="t"
-                        name={SEG_LABELS[k]}
-                        fill={stackColors[k]}
-                        maxBarSize={22}
-                      />
-                    ))}
-                    <Line yAxisId="calls" type="monotone" dataKey="calls" name="调用次数" stroke={chart.accent} strokeWidth={1.5} strokeDasharray="5 3" dot={false} />
-                  </ComposedChart>
-                </ResponsiveContainer>
-              </div>
-            )}
+      {/* ② Token 与调用趋势（双轴：堆叠柱 + 调用虚线） */}
+      <div className="mt-5">
+        <div className="mb-2 text-sm font-medium">Token 与调用趋势</div>
+        {chartEmpty ? (
+          <EmptyState
+            icon={<Activity size={22} />}
+            title="暂无趋势数据"
+            hint="网关代理转发产生用量后展示（保留 90 天）；仅覆盖走网关流量，可在 API 服务页查看实时用量。"
+          />
+        ) : (
+          <div className="h-64">
+            <ResponsiveContainer>
+              <ComposedChart data={trend} margin={{ top: 12, right: 8, left: 0, bottom: 4 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke={chart.grid} opacity={0.25} vertical={false} />
+                <XAxis dataKey="label" {...axisProps} minTickGap={24} />
+                <YAxis yAxisId="tokens" {...axisProps} axisLine={false} width={56} tickFormatter={(v: number) => fmtTokens(v)} />
+                <YAxis yAxisId="calls" orientation="right" {...axisProps} axisLine={false} width={40} />
+                <Tooltip
+                  contentStyle={tooltipStyle}
+                  formatter={(v: number, name: string) => [
+                    name === 'calls' ? String(v) : fmtTokens(v),
+                    SEG_LABELS[name] ?? (name === 'calls' ? '调用次数' : name),
+                  ]}
+                />
+                <Legend wrapperStyle={{ fontSize: 12 }} />
+                {segments.map((k) => (
+                  <Bar
+                    key={k}
+                    yAxisId="tokens"
+                    dataKey={k}
+                    stackId="t"
+                    name={SEG_LABELS[k]}
+                    fill={stackColors[k]}
+                    maxBarSize={22}
+                  />
+                ))}
+                <Line yAxisId="calls" type="monotone" dataKey="calls" name="调用次数" stroke={chart.accent} strokeWidth={1.5} strokeDasharray="5 3" dot={false} />
+              </ComposedChart>
+            </ResponsiveContainer>
           </div>
+        )}
+      </div>
 
-          {/* ③ 各模型消耗趋势（issue #160：日 × 模型折线；official 无按模型 token 明细 → 诚实空态） */}
-          <div className="mt-5 border-t border-slate-100 pt-4 dark:border-zinc-800">
-            <div className="mb-2 flex items-center gap-2">
-              <h4 className="text-sm font-medium">各模型消耗趋势</h4>
-              {hasModelDaily && modelTrend.series.length > 0 && (
-                <span className="text-xs text-slate-400">所选区间 · Top8 + 其他 · 口径 = {modelUnitLabel}</span>
-              )}
-              {source === 'gateway' && <Badge tone="amber">网关源无按模型 token 明细，口径 = 请求数</Badge>}
-            </div>
-            {!hasModelDaily ? (
-              <EmptyState
-                icon={<Activity size={22} />}
-                title="官网源无按模型 token 明细"
-                hint="官网日粒度仅 input/output/cache 汇总，无按模型拆分；模型趋势请切「本地」或「API网关」源。"
-              />
-            ) : modelTrend.series.length === 0 ? (
-              <EmptyState
-                icon={<Activity size={22} />}
-                title="暂无模型趋势数据"
-                hint={source === 'gateway' ? '该区间暂无网关请求记录。' : '该范围内暂无本地 Token 记录。'}
-              />
-            ) : (
-              <ModelTrendChart rows={modelTrend.rows} series={modelTrend.series} showDots={showDots} fmtValue={modelFmt} />
-            )}
-          </div>
+      {/* ③ 各模型消耗趋势（issue #160：日 × 模型折线；网关无按模型 token 明细 → 请求数口径） */}
+      <div className="mt-5 border-t border-slate-100 pt-4 dark:border-zinc-800">
+        <div className="mb-2 flex items-center gap-2">
+          <h4 className="text-sm font-medium">各模型消耗趋势</h4>
+          {modelTrend.series.length > 0 && (
+            <span className="text-xs text-slate-400">所选区间 · Top8 + 其他 · 口径 = 请求数</span>
+          )}
+          <Badge tone="amber">网关源无按模型 token 明细，口径 = 请求数</Badge>
+        </div>
+        {modelTrend.series.length === 0 ? (
+          <EmptyState icon={<Activity size={22} />} title="暂无模型趋势数据" hint="该区间暂无网关请求记录。" />
+        ) : (
+          <ModelTrendChart
+            rows={modelTrend.rows}
+            series={modelTrend.series}
+            showDots={showDots}
+            fmtValue={(n: number) => n.toLocaleString('zh-CN')}
+          />
+        )}
+      </div>
 
-          {/* ④ 年度活动热力图 */}
-          <div className="mt-5 border-t border-slate-100 pt-4 dark:border-zinc-800">
-            <div className="mb-2">
-              <h4 className="text-sm font-medium">年度活动热力图</h4>
-            </div>
-            <ActivityHeatmap
-              values={heatValues}
-              unit="tokens"
-              fmtValue={fmtTokens}
-              emptyHint={
-                source === 'local'
-                  ? '最近一年暂无本地会话用量。'
-                  : source === 'gateway'
-                    ? '网关用量仅保留 90 天，热力图仅覆盖该窗口。'
-                    : '暂无 Trae 官网 token 记录：点击「刷新数据」拉取后展示。'
-              }
-            />
-          </div>
-        </>
-      )}
+      {/* ④ 年度活动热力图 */}
+      <div className="mt-5 border-t border-slate-100 pt-4 dark:border-zinc-800">
+        <div className="mb-2">
+          <h4 className="text-sm font-medium">年度活动热力图</h4>
+        </div>
+        <ActivityHeatmap
+          values={heatValues}
+          unit="tokens"
+          fmtValue={fmtTokens}
+          emptyHint="网关用量仅保留 90 天，热力图仅覆盖该窗口。"
+        />
+      </div>
     </div>
   );
 }

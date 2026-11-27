@@ -14,10 +14,10 @@ import type {
   AccountView,
   QoderAccountView,
   QoderCreditsResult,
+  QoderWebUsage,
   UsageDayView,
   UsageHistoryResult,
   WbCreditsResult,
-  WbUsageFallback,
   WbUsageOfficialAll,
   WorkBuddyAccountView,
 } from '../../types';
@@ -34,12 +34,9 @@ function emptyData(): OverviewData {
     wbCredits: null,
     wbCheckin: [],
     wbOfficial: null,
-    wbUsage: null,
     qoderAccounts: [],
     qoderCredits: null,
-    qoderWebUsage: null,
     qoderCheckin: [],
-    qoderSnapshots: [],
     nowMs: NOW,
   };
 }
@@ -107,7 +104,7 @@ describe('summarizeTrae', () => {
 });
 
 describe('summarizeBuddy', () => {
-  it('今日已用优先取官网用量，官网失败回退本地快照', () => {
+  it('今日已用只取官网用量；官网缺失为 null，不回退本地快照', () => {
     const accounts = [
       { id: 'b1', nickname: 'Buddy甲', credits_balance: 120, needs_relogin: true, access_token_expires_at: null },
       { id: 'b2', nickname: 'Buddy乙', credits_balance: 80, needs_relogin: false, access_token_expires_at: NOW_SEC + 10 },
@@ -131,31 +128,21 @@ describe('summarizeBuddy', () => {
       summary: { usage_today: 9.8, usage_7days: 40, usage_this_month: 90 },
       daily: [],
     } as unknown as WbUsageOfficialAll;
-    const fallback = {
-      summary: { usage_today: 7.2, usage_7days: 38, usage_this_month: 88 },
-    } as WbUsageFallback;
 
     const withOfficial = summarizeBuddy(
       accounts,
       credits,
       [{ date: '2026-11-19', user_id: 'b1', status: 'success' }] as never,
       official,
-      fallback,
       NOW,
     );
     expect(withOfficial.usedToday).toBe(9.8);
     expect(withOfficial.notes[0]).toContain('官网');
 
-    const withoutOfficial = summarizeBuddy(
-      accounts,
-      credits,
-      [],
-      null,
-      fallback,
-      NOW,
-    );
-    expect(withoutOfficial.usedToday).toBe(7.2);
-    expect(withoutOfficial.notes[0]).toContain('回退本地快照');
+    // 官网缺失：显示「—」，不回退本地快照/网关
+    const withoutOfficial = summarizeBuddy(accounts, credits, [], null, NOW);
+    expect(withoutOfficial.usedToday).toBeNull();
+    expect(withoutOfficial.notes[0]).toContain('不回退');
     expect(withOfficial.available).toBe(100);
     expect(withOfficial.expiringIn7d).toBe(30);
     expect(withOfficial.checkedToday).toBe(1);
@@ -165,82 +152,92 @@ describe('summarizeBuddy', () => {
   });
 });
 
-describe('qoderUsedByUid 三源优先级', () => {
-  it('官网采集 > 网关实测 > 快照差分，且 KPI 与明细同源', () => {
+describe('qoderUsedByUid 官网采集口径', () => {
+  const webAccount = (id: string, name: string, todayUsage: number) => ({
+    account_id: id,
+    account_name: name,
+    fetched_at_ms: 0,
+    range_start: '2026-11-19',
+    range_end: '2026-11-19',
+    records_total: 1,
+    billed_total: todayUsage,
+    summary: { usage_today: todayUsage, usage_7days: todayUsage, usage_this_month: todayUsage },
+  });
+  const webUsage = (accounts: ReturnType<typeof webAccount>[], todayUsage: number) =>
+    ({
+      status: 'complete',
+      source: 'official_web',
+      fetched_at_ms: 0,
+      range_start: '2026-11-19',
+      range_end: '2026-11-19',
+      records_total: accounts.length,
+      billed_total: todayUsage,
+      summary: { usage_today: todayUsage, usage_7days: todayUsage, usage_this_month: todayUsage },
+      daily: [],
+      models: [],
+      accounts_total: accounts.length,
+      accounts,
+    }) as QoderWebUsage;
+
+  it('只认官网采集：未采集账号不计入，网关与快照不参与', () => {
     const data = emptyData();
     const today = '2026-11-19';
     data.qoderAccounts = [
       { id: 'q1', nickname: '甲' },
       { id: 'q2', nickname: '乙' },
-      { id: 'q3', nickname: '丙' },
     ] as QoderAccountView[];
-    data.qoderWeb = {
-      status: 'complete',
-      source: 'official_web',
-      fetched_at_ms: 0,
-      range_start: today,
-      range_end: today,
-      records_total: 1,
-      billed_total: 1,
-      summary: { usage_today: 10, usage_7days: 10, usage_this_month: 10 },
-      daily: [],
-      models: [],
-      accounts: [
-        {
-          account_id: 'q1',
-          account_name: '甲',
-          fetched_at_ms: 0,
-          range_start: today,
-          range_end: today,
-          records_total: 1,
-          billed_total: 1,
-          summary: { usage_today: 10, usage_7days: 10, usage_this_month: 10 },
-        },
-      ],
-    };
+    data.qoderWeb = webUsage([webAccount('q1', '甲', 10)], 10);
+    // 网关/签到即便有数据也不应参与消耗口径
     data.gwUsage = {
       qoder: [
         {
           date: today,
-          credits: 5,
+          credits: 99,
           total_requests: 0,
           ok: 0,
           errors: 0,
           prompt_tokens: 0,
           completion_tokens: 0,
           models: [],
-          accounts: [
-            { name: 'q1', credits: 9 },
-            { name: 'q2', credits: 5 },
-          ],
+          accounts: [{ name: 'q2', credits: 99 }],
         } as any,
       ],
     };
-    data.qoderSnapshots = [
-      { date: '2026-11-18', consumed: null, total_balance: 300, ts: 0, accounts: [{ user_id: 'q3', total: 300 }] },
-      { date: today, consumed: null, total_balance: 280, ts: 0, accounts: [{ user_id: 'q3', total: 280 }] },
-    ] as any;
 
-    const used = qoderUsedByUid(data, today);
-    // q1 官网优先（不取网关 9）；q2 回退网关；q3 回退快照差分（300-280）
+    const used = qoderUsedByUid(data);
+    expect([...used.keys()]).toEqual(['q1']);
     expect(used.get('q1')).toEqual({ credits: 10, source: '官网采集（逐账号）' });
-    expect(used.get('q2')).toEqual({ credits: 5, source: 'API 网关实测积分' });
-    expect(used.get('q3')?.credits).toBe(20);
 
     const view = buildOverview(data);
     const qoder = view.platforms.find((p) => p.key === 'qoder')!;
-    expect(qoder.usedToday).toBe(35);
-    expect(qoder.notes[0]).toContain('官网采集 1/3 账号');
+    expect(qoder.usedToday).toBe(10);
+    expect(qoder.notes[0]).toContain('官网采集');
+    expect(qoder.notes[0]).toContain('1/2');
     const rows = view.credits.rows.filter((r) => r.platform === 'qoder');
     expect(rows.find((r) => r.uid === 'q1')?.credits).toBe(10);
-    expect(rows.find((r) => r.uid === 'q2')?.credits).toBe(5);
-    expect(rows.find((r) => r.uid === 'q3')?.credits).toBe(20);
-    expect(view.credits.total).toBe(35);
+    expect(rows.find((r) => r.uid === 'q2')?.credits).toBeNull();
+    expect(rows.find((r) => r.uid === 'q2')?.source).toContain('官网未采集该账号');
+    expect(view.credits.total).toBe(10);
+  });
+
+  it('未采集任何账号时 KPI 为 null、明细为空态，不回退网关/快照', () => {
+    const data = emptyData();
+    data.qoderAccounts = [{ id: 'q1', nickname: '甲' }] as QoderAccountView[];
+    data.gwUsage = {
+      qoder: [{ date: '2026-11-19', credits: 30 } as any],
+    };
+
+    const view = buildOverview(data);
+    const qoder = view.platforms.find((p) => p.key === 'qoder')!;
+    expect(qoder.usedToday).toBeNull();
+    expect(qoder.notes[0]).toContain('不回退');
+    expect(view.credits.rows.find((r) => r.platform === 'qoder')?.credits).toBeNull();
+    expect(view.credits.total).toBeNull();
   });
 });
 
 describe('summarizeQoder 与汇总', () => {
-  it('Qoder 今日已用取本地快照，consumed=null 显示缺失，逐包到期按日期求和', () => {
+  it('Qoder 官网采集缺失时今日已用为 null，逐包到期按日期求和', () => {
     const accounts = [{ id: 'q1', nickname: 'Qoder甲', credits_balance: 999, needs_relogin: false }] as QoderAccountView[];
     const credits = {
       ok: true,
@@ -259,20 +256,13 @@ describe('summarizeQoder 与汇总', () => {
         },
       ],
     } as QoderCreditsResult;
-    const s = summarizeQoder(
-      accounts,
-      credits,
-      [],
-      [{ date: '2026-11-19', consumed: null, total_balance: 200, ts: 0, accounts: [] }],
-      null,
-      NOW,
-    );
+    const s = summarizeQoder(accounts, credits, [], null, NOW);
     expect(s.available).toBe(200);
     expect(s.usedToday).toBeNull();
     expect(s.expiringIn7d).toBe(40);
     expect(s.expiringDetails).toHaveLength(1);
     expect(s.expiringDetails[0].credits).toBe(40);
-    expect(s.notes[0]).toContain('本地');
+    expect(s.notes[0]).toContain('不回退');
   });
 
   it('Qoder 到期 = 窗口内积分包 + 明细未含 plan 包时的订阅额度（口径与积分看板一致）', () => {
@@ -299,7 +289,6 @@ describe('summarizeQoder 与汇总', () => {
         ],
       } as QoderCreditsResult,
       [],
-      [],
       null,
       NOW,
     );
@@ -323,7 +312,6 @@ describe('summarizeQoder 与汇总', () => {
         ],
       } as QoderCreditsResult,
       [],
-      [],
       null,
       NOW,
     );
@@ -331,102 +319,58 @@ describe('summarizeQoder 与汇总', () => {
     expect(withPlanPkg.expiringDetails).toHaveLength(1);
   });
 
-  it('Qoder 官网会话可用时今日已用优先官方明细，失败回退快照', () => {
-    const official = summarizeQoder(
-      [],
-      null,
-      [],
-      [{ date: '2026-11-19', consumed: 3, total_balance: 10, ts: 0, accounts: [] }],
-      { ok: true, used_today: 21.5, billed_today: 5, source: 'official_web_cookie' },
-      NOW,
-    );
-    expect(official.usedToday).toBe(21.5);
-    expect(official.notes[0]).toContain('官网会话');
-
-    const failed = summarizeQoder(
-      [],
-      null,
-      [],
-      [{ date: '2026-11-19', consumed: 3, total_balance: 10, ts: 0, accounts: [] }],
-      { ok: false, used_today: null, error: '未读取到 Cookie' },
-      NOW,
-    );
-    expect(failed.usedToday).toBe(3);
-    expect(failed.notes[0]).toContain('回退');
-  });
-
-  it('Qoder 消耗取 API 网关源：今日已用优先网关实测值，逐账号明细同源', () => {
+  it('Qoder 消耗取官网采集：今日已用与逐账号明细同源', () => {
     const accounts = [
       { id: 'q1', nickname: 'Qoder甲' },
       { id: 'q2', nickname: 'Qoder乙' },
     ] as QoderAccountView[];
-    // 网关当日：q1 实测 12、q2 实测 6；快照差分与官网会话都有更低的值（应被忽略）
-    const summary = summarizeQoder(
-      accounts,
-      null,
-      [],
-      [
-        { date: '2026-11-18', consumed: 1, total_balance: 100, ts: 0, accounts: [] },
-        { date: '2026-11-19', consumed: 99, total_balance: 80, ts: 0, accounts: [] },
-      ],
-      { ok: true, used_today: 77, source: 'official_web_cookie' },
-      NOW,
-      {
-        date: '2026-11-19',
-        total_requests: 3,
-        ok: 3,
-        errors: 0,
-        stream_requests: 0,
-        prompt_tokens: 0,
-        completion_tokens: 0,
-        cached_tokens: 0,
-        credits: 18,
-        original_credits: 20,
-        avg_duration_ms: 0,
-        models: [],
-        accounts: [
-          { name: 'q1', requests: 2, ok: 2, errors: 0, credits: 12 },
-          { name: 'q2', requests: 1, ok: 1, errors: 0, credits: 6 },
-        ],
-        keys: [],
-        key_tokens: [],
-        account_tokens: [],
-      } as UsageDayView,
-    );
-    expect(summary.usedToday).toBe(18);
-    expect(summary.notes[0]).toContain('网关');
-
-    const usage = summarizeCreditUsage({ ...emptyData(), qoderAccounts: accounts, gwUsage: {
-      qoder: [
+    const web = {
+      status: 'complete',
+      source: 'official_web',
+      fetched_at_ms: 0,
+      range_start: '2026-11-19',
+      range_end: '2026-11-19',
+      records_total: 3,
+      billed_total: 18,
+      summary: { usage_today: 18, usage_7days: 18, usage_this_month: 18 },
+      daily: [],
+      models: [],
+      accounts_total: 2,
+      accounts: [
         {
-          date: '2026-11-19',
-          total_requests: 3,
-          ok: 3,
-          errors: 0,
-          stream_requests: 0,
-          prompt_tokens: 0,
-          completion_tokens: 0,
-          cached_tokens: 0,
-          credits: 18,
-          original_credits: 20,
-          avg_duration_ms: 0,
-          models: [],
-          accounts: [
-            { name: 'q1', requests: 2, ok: 2, errors: 0, credits: 12 },
-            { name: 'q2', requests: 1, ok: 1, errors: 0, credits: 6 },
-          ],
-          keys: [],
-          key_tokens: [],
-          account_tokens: [],
-        } as UsageDayView,
+          account_id: 'q1',
+          account_name: 'Qoder甲',
+          fetched_at_ms: 0,
+          range_start: '2026-11-19',
+          range_end: '2026-11-19',
+          records_total: 2,
+          billed_total: 12,
+          summary: { usage_today: 12, usage_7days: 12, usage_this_month: 12 },
+        },
+        {
+          account_id: 'q2',
+          account_name: 'Qoder乙',
+          fetched_at_ms: 0,
+          range_start: '2026-11-19',
+          range_end: '2026-11-19',
+          records_total: 1,
+          billed_total: 6,
+          summary: { usage_today: 6, usage_7days: 6, usage_this_month: 6 },
+        },
       ],
-    } }, NOW);
+    } as QoderWebUsage;
+
+    const summary = summarizeQoder(accounts, null, [], web, NOW);
+    expect(summary.usedToday).toBe(18);
+    expect(summary.notes[0]).toContain('官网采集');
+
+    const usage = summarizeCreditUsage({ ...emptyData(), qoderAccounts: accounts, qoderWeb: web }, NOW);
     const qoderRows = usage.rows.filter((r) => r.platform === 'qoder');
     expect(qoderRows.map((r) => [r.name, r.credits])).toEqual([
       ['Qoder甲', 12],
       ['Qoder乙', 6],
     ]);
-    expect(qoderRows.every((r) => r.source === 'API 网关实测积分')).toBe(true);
+    expect(qoderRows.every((r) => r.source === '官网采集（逐账号）')).toBe(true);
     expect(usage.total).toBe(18);
   });
 
@@ -454,7 +398,7 @@ describe('summarizeQoder 与汇总', () => {
 });
 
 describe('summarizeCreditUsage', () => {
-  it('Trae/Buddy 取逐账号官网口径、Qoder 取快照差分，按消耗降序', () => {
+  it('Trae/Buddy 取逐账号官网口径、Qoder 取官网采集，按消耗降序', () => {
     const data = emptyData();
     data.traeAccounts = [{ user_id: 't1', name: 'Trae甲' }] as AccountView[];
     data.traeUsage = {
@@ -470,10 +414,31 @@ describe('summarizeCreditUsage', () => {
       ],
     } as unknown as WbUsageOfficialAll;
     data.qoderAccounts = [{ id: 'q1', nickname: 'Qoder甲' }] as QoderAccountView[];
-    data.qoderSnapshots = [
-      { date: '2026-11-18', ts: 0, total_balance: 100, accounts: [{ user_id: 'q1', total: 100 }] },
-      { date: '2026-11-19', ts: 0, total_balance: 90, accounts: [{ user_id: 'q1', total: 90 }] },
-    ];
+    data.qoderWeb = {
+      status: 'complete',
+      source: 'official_web',
+      fetched_at_ms: 0,
+      range_start: '2026-11-19',
+      range_end: '2026-11-19',
+      records_total: 1,
+      billed_total: 10,
+      summary: { usage_today: 10, usage_7days: 10, usage_this_month: 10 },
+      daily: [],
+      models: [],
+      accounts_total: 1,
+      accounts: [
+        {
+          account_id: 'q1',
+          account_name: 'Qoder甲',
+          fetched_at_ms: 0,
+          range_start: '2026-11-19',
+          range_end: '2026-11-19',
+          records_total: 1,
+          billed_total: 10,
+          summary: { usage_today: 10, usage_7days: 10, usage_this_month: 10 },
+        },
+      ],
+    } as QoderWebUsage;
 
     const s = summarizeCreditUsage(data, NOW);
     expect(s.accounts).toBe(3);
@@ -484,52 +449,6 @@ describe('summarizeCreditUsage', () => {
       ['qoder', 'Qoder甲', 10],
       ['buddy', 'Buddy甲', 8],
     ]);
-  });
-
-  it('Qoder 当日签到导致余额逆差时，消耗按「前日 + 签到 − 当日」计算（不再恒 0）', () => {
-    // 线上真实形态：每天签到 +100，余额从 1270 涨到 1353，纯差分会是负数被钳 0
-    const data = emptyData();
-    data.qoderAccounts = [{ id: 'q1', nickname: 'Qoder甲' }] as QoderAccountView[];
-    data.qoderSnapshots = [
-      { date: '2026-11-18', ts: 0, total_balance: 1270, accounts: [{ user_id: 'q1', total: 1270 }] },
-      { date: '2026-11-19', ts: 0, total_balance: 1353, accounts: [{ user_id: 'q1', total: 1353 }] },
-    ];
-    data.qoderCheckin = [
-      { date: '2026-11-19', time: '00:10:00', user_id: 'q1', name: 'Qoder甲', status: 'success', message: '', reward: 100 },
-    ];
-
-    const s = summarizeCreditUsage(data, NOW);
-    const row = s.rows.find((r) => r.platform === 'qoder');
-    // 1270 + 100 − 1353 = 17（修正前：1270 − 1353 = −83 → 钳 0，明细恒 0）
-    expect(row?.credits).toBe(17);
-    expect(row?.source).toContain('+100');
-  });
-
-  it('Qoder 签到奖励取 campaigns 明细优先（与获得积分口径一致）', () => {
-    const data = emptyData();
-    data.qoderAccounts = [{ id: 'q1', nickname: 'Qoder甲' }] as QoderAccountView[];
-    data.qoderSnapshots = [
-      { date: '2026-11-18', ts: 0, total_balance: 1000, accounts: [{ user_id: 'q1', total: 1000 }] },
-      { date: '2026-11-19', ts: 0, total_balance: 1080, accounts: [{ user_id: 'q1', total: 1080 }] },
-    ];
-    data.qoderCheckin = [
-      {
-        date: '2026-11-19',
-        time: '00:10:00',
-        user_id: 'q1',
-        name: 'Qoder甲',
-        status: 'success',
-        message: '',
-        // reward 与 campaigns 并存时以明细为准（防合计字段含重复项）
-        reward: 999,
-        campaigns: [{ id: 'c1', name: '每日登录', kind: 'daily', reward: 60 }, { id: 'c2', name: '额外', reward: 20 }],
-      },
-    ];
-
-    const s = summarizeCreditUsage(data, NOW);
-    // 1000 + 80 − 1080 = 0（余额净增 80 全部来自签到，无消耗）
-    expect(s.rows.find((r) => r.platform === 'qoder')?.credits).toBe(0);
-    expect(s.rows.find((r) => r.platform === 'qoder')?.source).toContain('+80');
   });
 
   it('无账号级数据时列出账号但 credits=null，合计为 null', () => {
@@ -543,9 +462,9 @@ describe('summarizeCreditUsage', () => {
     expect(s.withData).toBe(0);
     expect(s.total).toBeNull();
     expect(s.rows.every((r) => r.credits === null)).toBe(true);
-    // 缺失原因逐行给出，便于区分「未加载 / 无明细 / 无前一日对比」
+    // 缺失原因逐行给出，便于区分「未加载 / 无明细 / 未采集」
     expect(s.rows.find((r) => r.platform === 'trae')?.source).toContain('未加载');
-    expect(s.rows.find((r) => r.platform === 'qoder')?.source).toContain('快照');
+    expect(s.rows.find((r) => r.platform === 'qoder')?.source).toContain('官网');
   });
 });
 

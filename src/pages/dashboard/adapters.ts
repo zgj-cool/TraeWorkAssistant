@@ -6,7 +6,6 @@ import type {
   UsageHistoryResult,
   WbCheckinRecord,
   WbCreditsSnapshot,
-  WbUsageFallback,
   WbUsageOfficialAll,
 } from '../../types';
 
@@ -56,7 +55,8 @@ export function wbOfficialAllToPoints(r: WbUsageOfficialAll | null): BoardPoint[
 
 /**
  * 按账号筛选重算官网采集视图（uidSet = 池账号 id 集；null/空 = 直接用全池汇总）。
- * 筛选后无任何已采集账号 → null（调用方回退网关/快照），避免全 0 视图冒充真实消耗。
+ * 筛选后无任何已采集账号 → null（调用方展示「无官网采集数据」空态，不回退其他源），
+ * 避免全 0 视图冒充真实消耗。
  */
 export function aggregateQoderWebAccounts(
   r: QoderWebUsage | null,
@@ -142,18 +142,6 @@ export function qoderWebToPoints(r: QoderWebUsage | null): BoardPoint[] {
   });
 }
 
-/**
- * Qoder 本地快照差分（qoder_credits_history，日合计，365 天）。
- * 官网采集不可用时的回退源；快照无按模型粒度，models 恒为空。
- */
-export function qoderSnapshotsToPoints(snaps: QoderCreditsSnapshot[]): BoardPoint[] {
-  // consumed=null（首日/账号数变动日，差分不可比）不进 points：趋势/热力图留空，
-  // 对齐「不可比日不计入」口径与 earned 侧过滤——画 0 会与真实零消耗混淆（审查修复）
-  return snaps
-    .filter((s) => s.consumed != null)
-    .map((s) => ({ date: s.date.slice(0, 10), credits: s.consumed ?? 0, models: {} }));
-}
-
 /** Qoder 区间「获得积分」：快照 earned（签到合计口径，与积分统计 Tab 同源） */
 export function qoderEarnedByDate(snaps: QoderCreditsSnapshot[]): Map<string, number> {
   const m = new Map<string, number>();
@@ -161,12 +149,6 @@ export function qoderEarnedByDate(snaps: QoderCreditsSnapshot[]): Map<string, nu
     if (s.earned != null && s.earned > 0) m.set(s.date, (m.get(s.date) ?? 0) + s.earned);
   }
   return m;
-}
-
-/** Buddy 快照差分回退（workbuddy_usage_fallback，日合计，365 天快照史） */
-export function wbFallbackToPoints(fb: WbUsageFallback | null): BoardPoint[] {
-  if (!fb) return [];
-  return fb.daily.map((d) => ({ date: d.date.slice(0, 10), credits: d.usage, models: {} }));
 }
 
 /** Trae 区间「获得积分」：每日快照 earned（积分包 CycleStartTime 归日口径） */

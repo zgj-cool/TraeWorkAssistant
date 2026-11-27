@@ -4,15 +4,12 @@ import type {
   QoderAccountView,
   QoderCheckinRecord,
   QoderCreditsResult,
-  QoderCreditsSnapshot,
   QoderWebUsage,
-  QoderWebUsageToday,
   UsageDayView,
   UsageHistoryResult,
   ViewKey,
   WbCheckinRecord,
   WbCreditsResult,
-  WbUsageFallback,
   WbUsageOfficialAll,
   WorkBuddyAccountView,
 } from '../../types';
@@ -130,18 +127,12 @@ export interface OverviewData {
   wbAccounts: WorkBuddyAccountView[];
   wbCredits: WbCreditsResult | null;
   wbCheckin: WbCheckinRecord[];
-  /** Buddy 官网用量聚合（优先） */
+  /** Buddy 官网用量聚合（唯一消耗口径；官网缺失即 null，不回退本地快照） */
   wbOfficial: WbUsageOfficialAll | null;
-  /** Buddy 本地快照回退（官网不可用时） */
-  wbUsage: WbUsageFallback | null;
   qoderAccounts: QoderAccountView[];
   qoderCredits: QoderCreditsResult | null;
   qoderCheckin: QoderCheckinRecord[];
-  /** Qoder 本地积分快照差分（官网会话不可用时回退） */
-  qoderSnapshots: QoderCreditsSnapshot[];
-  /** Qoder 旧官网会话 Cookie 通道（已废弃：页面恒传 null；保留字段兼容测试与历史调用） */
-  qoderWebUsage: QoderWebUsageToday | null;
-  /** Qoder 官网采集聚合（Webview 同源 fetch，官方原始口径；仅本机登录账号） */
+  /** Qoder 官网采集聚合（Webview 同源 fetch，唯一消耗口径；未采集时为空） */
   qoderWeb?: QoderWebUsage | null;
   /** API 网关五桶今日用量（Token 消耗统计来源；缺省 = 未接入/加载失败） */
   gwUsage?: Partial<Record<GatewayPoolKey, UsageDayView[] | null>>;
@@ -279,13 +270,12 @@ export function summarizeTrae(
   );
 }
 
-/** Buddy：账号池 + 积分查询（逐包）+ 官网用量优先/本地快照回退 + 签到记录 */
+/** Buddy：账号池 + 积分查询（逐包）+ 官网用量（唯一消耗口径）+ 签到记录 */
 export function summarizeBuddy(
   accounts: WorkBuddyAccountView[],
   credits: WbCreditsResult | null,
   checkin: WbCheckinRecord[],
   official: WbUsageOfficialAll | null,
-  fallback: WbUsageFallback | null,
   nowMs = Date.now(),
 ): PlatformSummary {
   const nowSec = Math.floor(nowMs / 1000);
@@ -326,12 +316,15 @@ export function summarizeBuddy(
     }
   }
 
+  // 今日已用：只取官网用量聚合；官网缺失即 null（页面显示「—」），不回退本地快照/网关
   const officialToday = official?.summary?.usage_today;
-  const fallbackToday = fallback?.summary?.usage_today;
-  const usedToday = officialToday != null ? round(officialToday) : fallbackToday != null ? round(fallbackToday) : null;
-  const sourceNote = officialToday != null
-    ? official?.stale ? '今日已用：官网用量（过期缓存）' : '今日已用：官网用量'
-    : fallbackToday != null ? '今日已用：官网不可用，回退本地快照' : '今日已用：官网与快照均无数据';
+  const usedToday = officialToday != null ? round(officialToday) : null;
+  const sourceNote =
+    officialToday != null
+      ? official?.stale
+        ? '今日已用：官网用量（过期缓存）'
+        : '今日已用：官网用量'
+      : '今日已用：官网用量暂无数据（不回退本地/网关）';
 
   return finish(
     'buddy',
@@ -346,19 +339,15 @@ export function summarizeBuddy(
   );
 }
 
-/** Qoder：账号池 + 积分查询（逐包/订阅）+ 本地积分快照 + 签到记录（官网无消耗明细接口） */
+/** Qoder：账号池 + 积分查询（逐包/订阅）+ 签到记录；消耗只认官网采集 */
 export function summarizeQoder(
   accounts: QoderAccountView[],
   credits: QoderCreditsResult | null,
   checkin: QoderCheckinRecord[],
-  snapshots: QoderCreditsSnapshot[],
-  webUsage: QoderWebUsageToday | null,
+  /** 官网采集（Webview 同源 fetch；仅覆盖已采集账号，未采集无消耗数据） */
+  webCollect: QoderWebUsage | null,
   nowMs = Date.now(),
-  /** API 网关 Qoder 池当日用量（积分测量口径） */
-  gatewayDay: UsageDayView | null = null,
-  /** 官网采集（Webview 同源 fetch；仅覆盖已采集账号） */
-  webCollect: QoderWebUsage | null = null,
-  /** 逐账号今日消耗（buildOverview 预计算；缺省时按单源优先级回退，供单测直接调用） */
+  /** 逐账号今日消耗（buildOverview 预计算；缺省时按官网采集自行推导，供单测直接调用） */
   usedByUid?: Map<string, QoderUsedEntry>,
 ): PlatformSummary {
   const nowSec = Math.floor(nowMs / 1000);
@@ -422,47 +411,21 @@ export function summarizeQoder(
     }
   }
 
-  const todaySnap = [...snapshots].reverse().find((s) => s.date.slice(0, 10) === today);
-  // 消耗统计口径优先级（逐账号）：官网采集（官方原始接口）> API 网关实测 > 本地快照差分。
+  // 消耗统计口径：只认官网采集（官方原始接口）；未采集账号无数据，不回退网关/快照。
   // buildOverview 会预计算 usedByUid 传入，保证「KPI 合计 = 明细合计」。
-  const collectUsed = webCollect?.summary?.usage_today != null ? round(webCollect.summary.usage_today) : null;
-  const gatewayUsed = gatewayDay ? round(gatewayDay.credits) : null;
-  const officialUsed = webUsage?.ok ? webUsage.used_today : null;
   let usedToday: number | null;
-  let collectAccountCount = 0;
-  let usedEntryCount = 0;
   if (usedByUid) {
     const vals = [...usedByUid.values()];
-    usedEntryCount = vals.length;
-    collectAccountCount = vals.filter((v) => v.source.startsWith('官网采集')).length;
     usedToday = vals.length ? round(vals.reduce((s, v) => s + v.credits, 0)) : null;
   } else {
-    usedToday =
-      collectUsed != null
-        ? collectUsed
-        : gatewayUsed != null
-          ? gatewayUsed
-          : officialUsed != null
-            ? round(officialUsed)
-            : todaySnap?.consumed != null
-              ? round(todaySnap.consumed)
-              : null;
+    const collectUsed = webCollect?.summary?.usage_today;
+    usedToday = collectUsed != null ? round(collectUsed) : null;
   }
-  const sourceNote = usedByUid
-    ? usedToday == null
-      ? '今日已用：暂无可用数据源'
-      : collectAccountCount > 0
-        ? `今日已用：官网采集 ${collectAccountCount}/${accounts.length} 账号${collectAccountCount < usedEntryCount ? '（其余回退网关/快照）' : ''}`
-        : '今日已用：API 网关实测 / 快照差分'
-    : collectUsed != null
-      ? `今日已用：官网采集（官方接口，已采集 ${webCollect?.accounts_total ?? 0} 账号）`
-      : gatewayUsed != null
-        ? '今日已用：API 网关 Qoder 池实测积分'
-        : officialUsed != null
-          ? '今日已用：官网会话消耗明细（当前客户端登录账号）'
-          : webUsage?.error
-            ? '今日已用：官网会话不可用，回退本地快照'
-            : '今日已用：本地积分快照差分';
+  const collectedTotal = webCollect?.accounts_total ?? webCollect?.accounts?.length ?? 0;
+  const sourceNote =
+    usedToday == null
+      ? '今日已用：官网采集暂无数据（不回退本地/网关）'
+      : `今日已用：官网采集（官方接口，已采集 ${collectedTotal}/${accounts.length} 账号）`;
   return finish(
     'qoder',
     accounts.length,
@@ -566,51 +529,16 @@ export interface QoderUsedEntry {
 }
 
 /**
- * Qoder 逐账号今日消耗（三源按优先级取一）：
- * ① 官网采集（Webview 同源 fetch，官方原始口径 original_credits）
- * ② API 网关 Qoder 池实测积分（仅覆盖走网关流量）
- * ③ 本地快照差分（消耗 = 前日余额 + 当日签到 − 当日余额）
- * 逐账号取最高优先源后求和，保证「KPI 合计 = 明细合计」，
- * 不会因为部分账号未采集而把整池口径压成已采集子集。
+ * Qoder 逐账号今日消耗（只认官网采集）：
+ * 官网采集（Webview 同源 fetch，官方原始口径 original_credits）逐账号取当日用量。
+ * 未采集账号不出现在结果中（明细列 credits=null，不回退网关/快照）。
  */
-export function qoderUsedByUid(data: OverviewData, today: string): Map<string, QoderUsedEntry> {
+export function qoderUsedByUid(data: OverviewData): Map<string, QoderUsedEntry> {
   const out = new Map<string, QoderUsedEntry>();
-  // ① 官网采集（逐账号）
   for (const a of data.qoderWeb?.accounts ?? []) {
     out.set(a.account_id, {
       credits: round(a.summary.usage_today),
       source: '官网采集（逐账号）',
-    });
-  }
-  // ② 网关实测（当日有该账号记录且为非零）
-  for (const c of todayUsage(data.gwUsage?.qoder, today)?.accounts ?? []) {
-    if (out.has(c.name) || c.credits <= 0) continue;
-    out.set(c.name, { credits: round(c.credits), source: 'API 网关实测积分' });
-  }
-  // ③ 快照差分
-  const snaps = [...(data.qoderSnapshots ?? [])].sort((x, y) => x.date.localeCompare(y.date));
-  const todaySnap = snaps.find((s) => s.date.slice(0, 10) === today) ?? null;
-  const prevSnap = todaySnap
-    ? ([...snaps].reverse().find((s) => s.date.slice(0, 10) < today) ?? null)
-    : null;
-  const earnedByUid = new Map<string, number>();
-  for (const r of data.qoderCheckin ?? []) {
-    if (r.date !== today || r.status === 'fail') continue;
-    const reward = r.campaigns?.length
-      ? r.campaigns.reduce((s, c) => s + (c.reward ?? 0), 0)
-      : (r.reward ?? 0);
-    if (reward > 0) earnedByUid.set(r.user_id, (earnedByUid.get(r.user_id) ?? 0) + reward);
-  }
-  for (const a of data.qoderAccounts) {
-    if (out.has(a.id)) continue;
-    const cur = todaySnap?.accounts?.find((x) => x.user_id === a.id)?.total ?? null;
-    const prev = prevSnap?.accounts?.find((x) => x.user_id === a.id)?.total ?? null;
-    if (cur == null || prev == null) continue;
-    const earned = earnedByUid.get(a.id) ?? 0;
-    out.set(a.id, {
-      credits: Math.max(0, round(prev + earned - cur)),
-      source:
-        earned > 0 ? `快照差分（含当日签到 +${round(earned)} 补正）` : '快照差分',
     });
   }
   return out;
@@ -619,8 +547,8 @@ export function qoderUsedByUid(data: OverviewData, today: string): Map<string, Q
 /**
  * 逐账号今日积分消耗明细。
  * 口径：Trae = 官网消耗明细逐账号当日 credits；Buddy = 官网全账号用量的逐账号
- * usage_today（旧缓存缺省时标注仅合计口径）；Qoder = 官网采集 > 网关实测 > 快照差分
- * （逐账号取最高优先源，见 qoderUsedByUid）。
+ * usage_today（旧缓存缺省时标注仅合计口径）；Qoder = 官网采集（未采集账号 credits=null，
+ * 不回退网关/快照，见 qoderUsedByUid）。
  * 无账号级数据的账号仍列出（credits=null + 缺失原因），避免误以为账号缺失。
  */
 export function summarizeCreditUsage(
@@ -630,7 +558,7 @@ export function summarizeCreditUsage(
   usedByUid?: Map<string, QoderUsedEntry>,
 ): CreditUsageSummary {
   const today = localDate(nowMs);
-  const qoderUsed = usedByUid ?? qoderUsedByUid(data, today);
+  const qoderUsed = usedByUid ?? qoderUsedByUid(data);
   const rows: CreditUsageRow[] = [];
 
   const traeUsageByUid = new Map((data.traeUsage?.accounts ?? []).map((a) => [a.user_id, a]));
@@ -664,9 +592,7 @@ export function summarizeCreditUsage(
     });
   }
 
-  const snaps = [...(data.qoderSnapshots ?? [])].sort((x, y) => x.date.localeCompare(y.date));
-  const todaySnap = snaps.find((s) => s.date.slice(0, 10) === today) ?? null;
-  // Qoder 逐账号消耗：官网采集 > API 网关实测 > 本地快照差分（qoderUsedByUid 统一计算）
+  // Qoder 逐账号消耗：只认官网采集（qoderUsedByUid 统一计算）
   for (const a of data.qoderAccounts) {
     const hit = qoderUsed.get(a.id);
     if (hit) {
@@ -680,14 +606,14 @@ export function summarizeCreditUsage(
       });
       continue;
     }
-    // 三源均无数据：保留原因标注（官网未采集 + 快照不可比/未更新）
+    // 官网无该账号数据：保留原因标注（未采集 / 采集未覆盖该账号）
     rows.push({
       id: `qoder-${a.id}`,
       platform: 'qoder',
       uid: a.id,
       name: a.nickname,
       credits: null,
-      source: todaySnap ? '快照无前一日对比' : '今日快照未更新',
+      source: data.qoderWeb ? '官网未采集该账号' : '官网用量未采集',
     });
   }
 
@@ -701,7 +627,7 @@ export function summarizeCreditUsage(
   return { total, withData, accounts: rows.length, rows };
 }
 
-/** 三平台汇总（今日已用：Trae/Buddy 官网，Qoder 官网会话优先、本地快照回退） */
+/** 三平台汇总（今日已用：三个平台均只取官网源，缺失不回退） */
 export function aggregateKpis(summaries: PlatformSummary[]): OverviewKpis {
   return {
     accounts: summaries.reduce((n, s) => n + s.accounts, 0),
@@ -721,19 +647,16 @@ export function buildOverview(data: OverviewData): {
 } {
   const now = data.nowMs ?? Date.now();
   // 逐账号消耗先算一份，KPI 与明细共用（保证「KPI 合计 = 明细合计」）
-  const qoderUsed = qoderUsedByUid(data, localDate(now));
+  const qoderUsed = qoderUsedByUid(data);
   const platforms = [
     summarizeTrae(data.traeAccounts, data.traeUsage, now),
-    summarizeBuddy(data.wbAccounts, data.wbCredits, data.wbCheckin, data.wbOfficial, data.wbUsage, now),
+    summarizeBuddy(data.wbAccounts, data.wbCredits, data.wbCheckin, data.wbOfficial, now),
     summarizeQoder(
       data.qoderAccounts,
       data.qoderCredits,
       data.qoderCheckin,
-      data.qoderSnapshots,
-      data.qoderWebUsage,
-      now,
-      todayUsage(data.gwUsage?.qoder, localDate(now)),
       data.qoderWeb ?? null,
+      now,
       qoderUsed,
     ),
   ];

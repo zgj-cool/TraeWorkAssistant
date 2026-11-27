@@ -22,7 +22,7 @@ import { PlatformCard, PLATFORMS } from './overview/OverviewCards';
 type Data = Omit<OverviewData, 'nowMs'>;
 /** 局部刷新可单独覆盖的 Qoder 字段（采集完成 → 只重拉这几项并合并） */
 type QoderPatch = Partial<
-  Pick<Data, 'qoderAccounts' | 'qoderCredits' | 'qoderWeb' | 'qoderCheckin' | 'qoderSnapshots'>
+  Pick<Data, 'qoderAccounts' | 'qoderCredits' | 'qoderWeb' | 'qoderCheckin'>
 >;
 
 export default function Overview() {
@@ -55,8 +55,8 @@ export default function Overview() {
     try {
       const [
         traeUsage,
-        wbAccounts, wbCredits, wbCheckin, wbOfficial, wbUsage,
-        qoderAccounts, qoderCredits, qoderWebCollect, qoderCheckin, qoderHistory,
+        wbAccounts, wbCredits, wbCheckin, wbOfficial,
+        qoderAccounts, qoderCredits, qoderWebCollect, qoderCheckin,
         gwTrae, gwBuddy, gwBuddyAi, gwCustom, gwQoder,
       ] = await Promise.all([
         take(api.accounts.usageHistory(freshOfficial), null as UsageHistoryResult | null, 'Trae 官网消耗明细'),
@@ -64,14 +64,12 @@ export default function Overview() {
         take(api.workbuddy.creditsFetch(undefined, false), null as WbCreditsResult | null, 'Buddy 积分'),
         take(api.workbuddy.checkinResults(1), [], 'Buddy 签到记录'),
         take(api.workbuddy.usageOfficialAll(freshOfficial), null as WbUsageOfficialAll | null, 'Buddy 官网用量'),
-        take(api.workbuddy.usageFallback(), null, 'Buddy 本地用量回退'),
         take(api.qoder.accountsList(), [], 'Qoder 账号'),
         take(api.qoder.creditsFetch(undefined, false), null as QoderCreditsResult | null, 'Qoder 积分'),
         // 旧官网会话 cookie 通道已废弃（依赖客户端 cookie 库，实测不可用），
         // 改由「官网采集（Webview 同源 fetch）」提供的 qoderWeb 数据源
         take(api.qoder.webUsageGet(), null as QoderWebUsage | null, 'Qoder 官网采集'),
         take(api.qoder.checkinResults(1), [], 'Qoder 签到记录'),
-        take(api.qoder.creditsHistoryList(), { snapshots: [] }, 'Qoder 积分快照'),
         take(api.apiServer.usageStats(1), null as UsageDayView[] | null, '网关 Trae 用量'),
         take(api.apiServer.wbUsageStats(1), null as UsageDayView[] | null, '网关 Buddy 用量'),
         take(api.apiServer.buddyAiUsageStats(1), null as UsageDayView[] | null, '网关 BuddyAI 用量'),
@@ -85,13 +83,10 @@ export default function Overview() {
         wbCredits,
         wbCheckin,
         wbOfficial,
-        wbUsage,
         qoderAccounts,
         qoderCredits,
-        qoderWebUsage: null, // 旧 cookie 通道已废弃（页面不再调用，避免无效日志）
         qoderWeb: qoderWebCollect,
         qoderCheckin,
-        qoderSnapshots: qoderHistory.snapshots,
         gwUsage: {
           trae: gwTrae,
           buddy: gwBuddy,
@@ -155,22 +150,20 @@ export default function Overview() {
   const view = useMemo(() => (data ? buildOverview({ ...data, nowMs: Date.now() }) : null), [data]);
   const kpis = view?.kpis;
 
-  // Qoder 采集完成后的局部刷新：只重拉 Qoder 五项并合并进当前快照。
+  // Qoder 采集完成后的局部刷新：只重拉 Qoder 四项并合并进当前快照。
   // 不重跑全量 load，避免二次强制拉取 Trae/Buddy 官网用量（全量聚合 20-53s）。
   const reloadQoder = useCallback(async () => {
-    const [accounts, credits, web, checkin, history] = await Promise.all([
+    const [accounts, credits, web, checkin] = await Promise.all([
       api.qoder.accountsList().catch(() => null),
       api.qoder.creditsFetch(undefined, false).catch(() => null),
       api.qoder.webUsageGet().catch(() => null),
       api.qoder.checkinResults(1).catch(() => null),
-      api.qoder.creditsHistoryList().catch(() => null),
     ]);
     const patch: QoderPatch = {};
     if (accounts) patch.qoderAccounts = accounts;
     if (credits) patch.qoderCredits = credits;
     if (web) patch.qoderWeb = web;
     if (checkin) patch.qoderCheckin = checkin;
-    if (history) patch.qoderSnapshots = history.snapshots;
     if (Object.keys(patch).length === 0) return;
     const at = Date.now();
     // 页面数据尚未就绪时先存下，由 load 完成时合并
@@ -245,7 +238,7 @@ export default function Overview() {
         <StatCard
           label="今日已用积分"
           value={kpis?.usedToday != null ? fmtCredits(kpis.usedToday) : '—'}
-          hint="官网口径，失败回退快照"
+          hint="官网口径，缺失不回退本地/网关"
           tone="cyan"
         />
         <StatCard
@@ -287,7 +280,7 @@ export default function Overview() {
       </div>
 
       <p className="mt-5 text-[12px] leading-relaxed text-slate-500 dark:text-zinc-400">
-        统计口径：Trae 今日已用取官网消耗明细（usage_history_fetch，缓存命中时标注）；Buddy 取官网用量聚合（workbuddy_usage_official_all），官网不可用时回退本地快照；Qoder 优先取官网采集（Webview 同源 fetch，每个账号独立登录、按账号归档并做 uid 校验），不可用时依次回退 API 网关 Qoder 池实测积分、官网会话消耗明细与本地积分快照差分。Token 消耗取 API 网关按落日用量（Trae / Buddy / Qoder 三池，按账号归入对应平台卡片；BuddyAI / 自定义池见 API 管理页用量统计）。刷新会强制重拉 Trae/Buddy 官网用量（跳过 10min 缓存，全量聚合需数十秒），并与 Qoder 官网采集（已采集账号逐账号静默重采）并发执行，互不阻塞；Qoder 官网采集首次需在积分看板点「官网采集」并登录。
+        统计口径：今日已用积分三个平台均只取官网源——Trae 取官网消耗明细（usage_history_fetch，缓存命中时标注）；Buddy 取官网用量聚合（workbuddy_usage_official_all）；Qoder 取官网采集（Webview 同源 fetch，每个账号独立登录、按账号归档并做 uid 校验）。官网源缺失时显示「—」，不回退本地快照或 API 网关（二者与官网差异大，易误导）。Token 消耗取 API 网关按落日用量（Trae / Buddy / Qoder 三池，按账号归入对应平台卡片；BuddyAI / 自定义池见 API 管理页用量统计）。刷新会强制重拉 Trae/Buddy 官网用量（跳过 10min 缓存，全量聚合需数十秒），并与 Qoder 官网采集（已采集账号逐账号静默重采）并发执行，互不阻塞；Qoder 官网采集首次需在积分看板点「官网采集」并登录。
       </p>
     </div>
   );
